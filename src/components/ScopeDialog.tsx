@@ -34,7 +34,7 @@ export function ScopeDialog({
     setError("");
     try {
       const input = {
-        path: path.trim(),
+        path,
         recursive,
         watch,
         excludes: excludes

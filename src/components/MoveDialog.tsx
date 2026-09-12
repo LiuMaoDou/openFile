@@ -38,7 +38,7 @@ export function MoveDialog({
       <form
         onSubmit={(event) => {
           event.preventDefault();
-          setDestination(path.trim());
+          setDestination(path);
         }}
       >
         <header className="dialog-header">

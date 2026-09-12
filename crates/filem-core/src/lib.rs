@@ -43,6 +43,7 @@ struct Inner {
     watchers: Mutex<HashMap<String, notify::RecommendedWatcher>>,
     pool: rayon::ThreadPool,
     file_operations: Mutex<()>,
+    everything_query: Mutex<()>,
     scan_gate: scan_gate::ScanGate,
 }
 pub(crate) struct Control {
@@ -240,6 +241,7 @@ impl Engine {
                 watchers: Mutex::new(HashMap::new()),
                 pool: rayon::ThreadPoolBuilder::new().num_threads(4).build()?,
                 file_operations: Mutex::new(()),
+                everything_query: Mutex::new(()),
                 scan_gate: scan_gate::ScanGate::default(),
             }),
         };

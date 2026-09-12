@@ -162,6 +162,9 @@ pub fn reparse(attrs: u32) -> bool {
     attrs & 0x400 != 0
 }
 pub fn checked_root(path: &Path) -> Result<PathBuf> {
+    if !path.is_absolute() {
+        bail!("请输入文件夹或磁盘根目录的完整绝对路径。");
+    }
     let meta = fs::symlink_metadata(path)?;
     if meta.file_type().is_symlink() || reparse(attributes(&meta)) || placeholder(attributes(&meta))
     {
@@ -177,6 +180,15 @@ pub fn checked_root(path: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn folder_inputs_reject_current_directory_and_drive_relative_paths() {
+        for path in ["", ".", "..", "D:", "folder"] {
+            assert!(checked_root(Path::new(path)).is_err());
+        }
+        let temp = tempfile::tempdir().unwrap();
+        assert!(checked_root(temp.path()).is_ok());
+    }
 
     #[test]
     fn windows_drive_roots_and_unicode_paths_are_readable() {

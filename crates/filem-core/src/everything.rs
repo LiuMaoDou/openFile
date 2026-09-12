@@ -48,7 +48,7 @@ impl Engine {
             } else if available {
                 "Everything 已连接，可加速初次发现文件与文件名搜索。"
             } else {
-                "请安装并运行 Everything 1.4，并等待它完成索引；当前自动使用本地索引。"
+                "请安装并运行 Everything 1.4 标准版（非 Lite），并等待它完成索引；当前自动使用本地索引。"
             }
             .into(),
         }
@@ -104,6 +104,14 @@ impl Engine {
             let c = self.lock()?;
             return db::query(&c, q);
         }
+        // Cover filesystem validation as well as IPC. Rapid typing must not
+        // launch several concurrent 50,000-path stat passes.
+        let Ok(_query) = self.inner.everything_query.try_lock() else {
+            let c = self.lock()?;
+            let mut result = db::query(&c, q)?;
+            result.search_notice = Some("Everything 正在处理另一个搜索，已使用本地索引。".into());
+            return Ok(result);
+        };
         let scopes = {
             let c = self.lock()?;
             let mut s = c.prepare("SELECT id FROM scopes WHERE ?='' OR id=?")?;
@@ -202,13 +210,23 @@ fn request_fn(input: Request) -> Result<Reply> {
         process::{Command, Stdio},
         time::{Duration, Instant},
     };
-    let mut child = Command::new(std::env::current_exe()?)
-        .arg("--filem-everything-helper")
-        .creation_flags(0x08000000)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()?;
+    struct Helper(std::process::Child);
+    impl Drop for Helper {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let mut helper = Helper(
+        Command::new(std::env::current_exe()?)
+            .arg("--filem-everything-helper")
+            .creation_flags(0x08000000)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()?,
+    );
+    let child = &mut helper.0;
     let mut stdin = child.stdin.take().context("Everything 查询输入不可用")?;
     serde_json::to_writer(&mut stdin, &input)?;
     stdin.flush()?;
@@ -393,18 +411,50 @@ mod tests {
     #[test]
     fn unavailable_sdk_preserves_local_search() {
         let temp = tempfile::tempdir().unwrap();
-        let e = Engine::open(temp.path().join("index.sqlite")).unwrap();
+        let root = temp.path().join("source");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("alpha.txt"), "alpha content").unwrap();
+        let e = Engine::open(temp.path().join("state/index.sqlite")).unwrap();
+        e.add_scope(ScopeInput {
+            path: root.to_str().unwrap().into(),
+            recursive: true,
+            watch: false,
+            excludes: vec![],
+        })
+        .unwrap();
+        let start = std::time::Instant::now();
+        while e.summary().unwrap().scopes[0].freshness != "current" {
+            assert!(start.elapsed() < std::time::Duration::from_secs(5));
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
         let status = e.everything_status();
         assert!(!status.supported && !status.available);
         assert!(e.set_everything(true).is_err());
-        assert_eq!(
-            e.query(&Query {
+        // Simulate an enabled preference restored from Windows, so the test
+        // exercises the unavailable backend branch rather than disabled mode.
+        e.lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO settings(key,value) VALUES('everything','1')",
+                [],
+            )
+            .unwrap();
+        let result = e
+            .query(&Query {
+                search: "alpha".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(result.search_engine, "local");
+        assert_eq!(result.entries.len(), 1);
+        assert!(result.search_notice.unwrap().contains("Everything 不可用"));
+        let _busy = e.inner.everything_query.lock().unwrap();
+        let result = e
+            .query(&Query {
                 search: "a".into(),
                 ..Default::default()
             })
-            .unwrap()
-            .search_engine,
-            "local"
-        );
+            .unwrap();
+        assert!(result.search_notice.unwrap().contains("另一个搜索"));
     }
 }

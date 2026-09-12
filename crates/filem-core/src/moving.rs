@@ -456,6 +456,25 @@ fn copy_between_volumes(source: &Path, target: &Path) -> Result<()> {
     if let Ok(modified) = original.modified() {
         output.set_times(fs::FileTimes::new().set_modified(modified))?;
     }
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::fd::AsRawFd;
+        // Finder tags and resource forks live in extended attributes. Preserve
+        // them before removing the source, and fail closed if copying fails.
+        if unsafe {
+            libc::fcopyfile(
+                input.as_raw_fd(),
+                output.as_raw_fd(),
+                std::ptr::null_mut(),
+                libc::COPYFILE_ACL | libc::COPYFILE_XATTR,
+            )
+        } != 0
+        {
+            return Err(std::io::Error::last_os_error())
+                .context("无法保留文件扩展属性，原文件保持原位");
+        }
+    }
+    output.sync_all()?;
     drop(output);
     rename_exclusive(&temp, target).context("目标出现同名文件，已停止移动")?;
     fs::remove_file(source).context("文件已复制到目标，但原文件未能移除，请核对两个位置")?;
@@ -626,9 +645,49 @@ mod tests {
         let target = temp.path().join("副本.txt");
         let data = vec![0xa5; 2 * 1024 * 1024 + 37];
         fs::write(&source, &data).unwrap();
+        #[cfg(target_os = "macos")]
+        {
+            use std::{ffi::CString, os::unix::ffi::OsStrExt};
+            let name = CString::new("com.filem.test").unwrap();
+            let path = CString::new(source.as_os_str().as_bytes()).unwrap();
+            assert_eq!(
+                unsafe {
+                    libc::setxattr(
+                        path.as_ptr(),
+                        name.as_ptr(),
+                        b"preserved".as_ptr().cast(),
+                        9,
+                        0,
+                        0,
+                    )
+                },
+                0
+            );
+        }
         copy_between_volumes(&source, &target).unwrap();
         assert!(!source.exists());
         assert_eq!(fs::read(&target).unwrap(), data);
+        #[cfg(target_os = "macos")]
+        {
+            use std::{ffi::CString, os::unix::ffi::OsStrExt};
+            let name = CString::new("com.filem.test").unwrap();
+            let path = CString::new(target.as_os_str().as_bytes()).unwrap();
+            let mut value = [0u8; 9];
+            assert_eq!(
+                unsafe {
+                    libc::getxattr(
+                        path.as_ptr(),
+                        name.as_ptr(),
+                        value.as_mut_ptr().cast(),
+                        value.len(),
+                        0,
+                        0,
+                    )
+                },
+                9
+            );
+            assert_eq!(&value, b"preserved");
+        }
         fs::write(&source, b"keep original").unwrap();
         assert!(copy_between_volumes(&source, &target).is_err());
         assert_eq!(fs::read(&source).unwrap(), b"keep original");
