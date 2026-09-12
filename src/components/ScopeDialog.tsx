@@ -19,6 +19,9 @@ export function ScopeDialog({
   const dialog = useRef<HTMLDialogElement>(null);
   const [path, setPath] = useState(scope?.path || initialPath);
   const [recursive, setRecursive] = useState(scope?.recursive ?? true);
+  const [contentEnabled, setContentEnabled] = useState(
+    scope?.contentEnabled ?? false,
+  );
   const [watch, setWatch] = useState(scope?.watch ?? true);
   const [excludes, setExcludes] = useState(
     (scope?.excludes || DEFAULT_EXCLUDES).join("\n"),
@@ -37,6 +40,7 @@ export function ScopeDialog({
         path,
         recursive,
         watch,
+        contentEnabled,
         excludes: excludes
           .split("\n")
           .map((x) => x.trim())
@@ -150,6 +154,19 @@ export function ScopeDialog({
             />
             <span>
               监听文件变化<small>收到变更后重新核对文件夹</small>
+            </span>
+          </label>
+          <label className="check-field">
+            <input
+              type="checkbox"
+              checked={contentEnabled}
+              onChange={(e) => setContentEnabled(e.target.checked)}
+            />
+            <span>
+              启用内容索引
+              <small>
+                在本机提取文本、PDF 和新版 Office 文档的文字，支持按内容搜索
+              </small>
             </span>
           </label>
           <label className="field">

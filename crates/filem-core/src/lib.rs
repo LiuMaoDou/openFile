@@ -1,9 +1,13 @@
+pub mod content;
 mod db;
 mod deletion;
 mod everything;
+mod extract;
 pub mod model;
 mod moving;
-pub use everything::run_helper_if_requested;
+pub fn run_helper_if_requested() -> bool {
+    extract::run_helper_if_requested() || everything::run_helper_if_requested()
+}
 mod platform;
 mod rules;
 mod scan;
@@ -62,6 +66,22 @@ impl Engine {
                 .context("缺少文件或文件夹 ID")
         };
         match command {
+            "content_status" => Ok(to_value(
+                self.content_status(args.get("scopeId").and_then(|v| v.as_str()).unwrap_or(""))?,
+            )?),
+            "content_action" => {
+                self.content_action(
+                    id()?,
+                    args.get("action")
+                        .and_then(|v| v.as_str())
+                        .context("缺少内容索引操作")?,
+                )?;
+                Ok(json!(null))
+            }
+            "content_preview" => Ok(to_value(self.content_preview(
+                id()?,
+                args.get("search").and_then(|v| v.as_str()).unwrap_or(""),
+            )?)?),
             "everything_status" => Ok(to_value(self.everything_status())?),
             "set_everything" => Ok(to_value(
                 self.set_everything(
@@ -203,6 +223,7 @@ impl Engine {
             return Ok(scope.id);
         }
         self.add_scope(ScopeInput {
+            content_enabled: false,
             path: dir.to_string_lossy().into(),
             recursive: true,
             watch: true,
@@ -245,6 +266,7 @@ impl Engine {
                 scan_gate: scan_gate::ScanGate::default(),
             }),
         };
+        engine.start_content_worker();
         let scopes = engine.summary()?.scopes;
         for scope in scopes {
             engine.register(&scope.id)?;
@@ -267,7 +289,18 @@ impl Engine {
         }
     }
     pub fn query(&self, q: &Query) -> Result<QueryResult> {
-        self.query_with_everything(q)
+        if q.search.chars().count() > 512 || q.search.contains('\0') {
+            bail!("搜索内容最多 512 个字符，且不能包含空字符。");
+        }
+        if !["", "name", "content", "all"].contains(&q.search_mode.as_str()) {
+            bail!("未知搜索模式");
+        }
+        if q.search_mode == "content" || q.search_mode == "all" {
+            let c = self.lock()?;
+            db::query(&c, q)
+        } else {
+            self.query_with_everything(q)
+        }
     }
     pub fn add_scope(&self, input: ScopeInput) -> Result<String> {
         rules::Excludes::new(&input.excludes)?;
@@ -296,7 +329,7 @@ impl Engine {
                 .unwrap_or(path.as_os_str())
                 .to_string_lossy()
                 .to_string();
-            c.execute("INSERT INTO scopes(id,root,path,name,identity,depth,recursive,watch,excludes) VALUES(?,?,?,?,?,?,?,?,?)",params![id,encode(path.as_os_str()),path.to_string_lossy(),name,identity,path.components().count() as i64,input.recursive,input.watch,serde_json::to_string(&input.excludes)?])?;
+            c.execute("INSERT INTO scopes(id,root,path,name,identity,depth,recursive,watch,excludes,content_enabled) VALUES(?,?,?,?,?,?,?,?,?,?)",params![id,encode(path.as_os_str()),path.to_string_lossy(),name,identity,path.components().count() as i64,input.recursive,input.watch,serde_json::to_string(&input.excludes)?,input.content_enabled])?;
             db::bump(&c)?;
         }
         self.register(&id)?;
@@ -311,7 +344,8 @@ impl Engine {
             if old.path != input.path && checked_root(Path::new(&input.path))? != stored_root {
                 bail!("重新定位请移除旧文件夹后，选择新的根目录。");
             }
-            c.execute("UPDATE scopes SET recursive=?,watch=?,excludes=?,config_version=config_version+1 WHERE id=?",params![input.recursive,input.watch,serde_json::to_string(&input.excludes)?,id])?;
+            c.execute("DELETE FROM content_items WHERE entry_id IN (SELECT entry_id FROM memberships WHERE scope_id=?)", [id])?;
+            c.execute("UPDATE scopes SET recursive=?,watch=?,excludes=?,content_enabled=?,content_epoch=content_epoch+1,config_version=config_version+1 WHERE id=?",params![input.recursive,input.watch,serde_json::to_string(&input.excludes)?,input.content_enabled,id])?;
             db::bump(&c)?;
         }
         self.configure_watch(id)?;

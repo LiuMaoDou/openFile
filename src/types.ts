@@ -1,10 +1,12 @@
 export interface ScopeInput {
+  contentEnabled: boolean;
   path: string;
   recursive: boolean;
   watch: boolean;
   excludes: string[];
 }
 export interface Scope extends ScopeInput {
+  contentPaused: boolean;
   id: string;
   name: string;
   availability: string;
@@ -14,7 +16,15 @@ export interface Scope extends ScopeInput {
   lastScan: number | null;
   message: string | null;
 }
+export interface Snippet {
+  before: string;
+  matched: string;
+  after: string;
+  truncated: boolean;
+}
 export interface Entry {
+  snippet?: Snippet | null;
+  contentReady?: boolean;
   id: string;
   name: string;
   directory: string;
@@ -47,6 +57,7 @@ export interface Summary {
   revision: number;
 }
 export interface Query {
+  searchMode: "name" | "content" | "all";
   search: string;
   scopeId: string;
   extension: string;
@@ -60,7 +71,7 @@ export interface Query {
   limit: number;
 }
 export interface QueryResult {
-  searchEngine?: "local" | "everything";
+  searchEngine?: "local" | "everything" | "content";
   searchNotice?: string | null;
   entries: Entry[];
   total: number;
@@ -91,6 +102,7 @@ export interface DeletePlan {
   items: DeleteItem[];
 }
 export const DEFAULT_QUERY: Query = {
+  searchMode: "name",
   search: "",
   scopeId: "",
   extension: "",

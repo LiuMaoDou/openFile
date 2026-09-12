@@ -477,6 +477,7 @@ mod candidate_tests {
         let e = Engine::open(temp.path().join("state/index.sqlite")).unwrap();
         let scope = e
             .add_scope(ScopeInput {
+                content_enabled: false,
                 path: display_path(&root),
                 recursive: true,
                 watch: false,
@@ -519,6 +520,7 @@ mod candidate_tests {
         fs::write(source.join("keep.txt"), "keep content").unwrap();
         let e = Engine::open(temp.path().join("state/index.sqlite")).unwrap();
         let input = |p: &Path| ScopeInput {
+            content_enabled: false,
             path: display_path(p),
             recursive: true,
             watch: false,

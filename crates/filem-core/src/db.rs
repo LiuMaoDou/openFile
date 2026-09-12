@@ -7,7 +7,7 @@ pub fn connect(path: &Path) -> Result<Connection> {
     let c = Connection::open(path)?;
     c.busy_timeout(std::time::Duration::from_secs(5))?;
     let version: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if version > 3 {
+    if version > 4 {
         bail!("索引版本高于当前应用支持的版本，请使用更新的 FileM。");
     }
     c.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;
@@ -40,7 +40,8 @@ pub fn connect(path: &Path) -> Result<Connection> {
       UPDATE move_items SET status='unknown',message='上次移动中断，请核对原位置和目标位置；不会自动重试。' WHERE status='running';
       UPDATE move_items SET status='cancelled',message='上次操作中断，未执行此项。' WHERE status='ready' AND operation_id IN (SELECT id FROM move_operations WHERE state='running');
       UPDATE move_operations SET state='interrupted' WHERE state='running';
-      PRAGMA user_version=3;")?;
+")?;
+    crate::content::migrate(&c)?;
     c.execute("UPDATE scopes SET freshness='verifying', availability='offline', message='正在校验上次索引'",[])?;
     Ok(c)
 }
@@ -53,10 +54,12 @@ pub fn revision(c: &Connection) -> Result<u64> {
 }
 pub fn scopes(c: &Connection) -> Result<Vec<Scope>> {
     let mut s=c.prepare("SELECT s.id,name,path,recursive,watch,excludes,availability,freshness,
-      (SELECT COUNT(*) FROM memberships m WHERE m.scope_id=s.id),scanned,last_scan,message FROM scopes s ORDER BY rowid")?;
+      (SELECT COUNT(*) FROM memberships m WHERE m.scope_id=s.id),scanned,last_scan,message,content_enabled,content_paused FROM scopes s ORDER BY rowid")?;
     let result = s
         .query_map([], |r| {
             Ok(Scope {
+                content_enabled: r.get(12)?,
+                content_paused: r.get(13)?,
                 id: r.get(0)?,
                 name: display_path_text(&r.get::<_, String>(1)?),
                 path: display_path_text(&r.get::<_, String>(2)?),
@@ -76,7 +79,7 @@ pub fn scopes(c: &Connection) -> Result<Vec<Scope>> {
 }
 pub fn root(c: &Connection, id: &str) -> Result<(PathBuf, String, i64, ScopeInput)> {
     Ok(c.query_row(
-        "SELECT root,identity,config_version,path,recursive,watch,excludes FROM scopes WHERE id=?",
+        "SELECT root,identity,config_version,path,recursive,watch,excludes,content_enabled FROM scopes WHERE id=?",
         [id],
         |r| {
             Ok((
@@ -84,7 +87,7 @@ pub fn root(c: &Connection, id: &str) -> Result<(PathBuf, String, i64, ScopeInpu
                 r.get(1)?,
                 r.get(2)?,
                 ScopeInput {
-                    path: display_path_text(&r.get::<_, String>(3)?),
+                    content_enabled: r.get(7)?,                    path: display_path_text(&r.get::<_, String>(3)?),
                     recursive: r.get(4)?,
                     watch: r.get(5)?,
                     excludes: serde_json::from_str(&r.get::<_, String>(6)?).unwrap_or_default(),
@@ -179,10 +182,19 @@ pub fn query(c: &Connection, q: &Query) -> Result<QueryResult> {
         values.push(q.group.clone().into());
     }
     if !q.search.is_empty() {
-        conditions
-            .push("(instr(lower(e.name),lower(?))>0 OR instr(lower(d.display),lower(?))>0)".into());
-        values.push(q.search.clone().into());
-        values.push(q.search.clone().into());
+        let names = "(instr(lower(e.name),lower(?))>0 OR instr(lower(d.display),lower(?))>0)";
+        if q.search_mode == "content" {
+            conditions.push(crate::content::match_sql(q, &mut values));
+        } else {
+            values.push(q.search.clone().into());
+            values.push(q.search.clone().into());
+            if q.search_mode == "all" {
+                let content = crate::content::match_sql(q, &mut values);
+                conditions.push(format!("({names} OR {content})"));
+            } else {
+                conditions.push(names.into());
+            }
+        }
     }
     if let Some(size) = q.min_size {
         conditions.push("e.size>=?".into());
@@ -232,6 +244,8 @@ pub fn query(c: &Connection, q: &Query) -> Result<QueryResult> {
         let scope_name = display_path_text(&scope_name);
         let relative = directory.strip_prefix(&scope_root).unwrap_or(&directory);
         entries.push(Entry {
+            content_ready: c.query_row("SELECT EXISTS(SELECT 1 FROM content_items ci WHERE ci.entry_id=? AND ci.state='ready')", [r.get::<_,i64>(0)?], |r|r.get(0))?,
+            snippet: None,
             id: r.get::<_, i64>(0)?.to_string(),
             name: r.get(1)?,
             path: display_path(&directory.join(native_name)),
@@ -247,9 +261,31 @@ pub fn query(c: &Connection, q: &Query) -> Result<QueryResult> {
             online: r.get(11)?,
         });
     }
+    let content_search =
+        !q.search.is_empty() && ["content", "all"].contains(&q.search_mode.as_str());
+    if content_search {
+        for entry in &mut entries {
+            let text: Option<(String,bool)> = c.query_row("SELECT substr(ci.text,max(1,instr(lower(ci.text),lower(?))-45),length(?)+190),ci.truncated FROM content_items ci JOIN entries e ON e.id=ci.entry_id WHERE e.id=? AND ci.state='ready' AND ci.identity=e.identity AND ci.size=e.size AND ci.mtime=e.mtime AND EXISTS(SELECT 1 FROM memberships m JOIN scopes s ON s.id=m.scope_id WHERE m.entry_id=e.id AND s.content_enabled=1 AND (?='' OR s.id=?))", params![q.search,q.search,entry.id,q.scope_id,q.scope_id], |r|Ok((r.get(0)?,r.get(1)?))).optional()?;
+            if let Some((text, truncated)) = text {
+                entry.snippet = crate::content::snippet(&text, &q.search, truncated);
+            }
+        }
+    }
+
     Ok(QueryResult {
-        search_engine: "local".into(),
-        search_notice: None,
+        search_engine: if content_search { "content" } else { "local" }.into(),
+        search_notice: if content_search {
+            Some(
+                if q.search.chars().count() < 3 {
+                    "正在搜索已索引内容 · 短词搜索可能较慢；未完成索引的文件暂不参与内容匹配"
+                } else {
+                    "正在搜索已索引内容 · 未完成索引的文件暂不参与内容匹配"
+                }
+                .into(),
+            )
+        } else {
+            None
+        },
         entries,
         total,
         revision: revision(c)?,

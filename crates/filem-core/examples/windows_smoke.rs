@@ -75,6 +75,7 @@ mod native {
         }
         engine.set_everything(true)?;
         let input = |path: &std::path::Path| ScopeInput {
+            content_enabled: false,
             path: path.to_string_lossy().into_owned(),
             recursive: true,
             watch: false,

@@ -490,6 +490,7 @@ mod tests {
     };
     fn input(path: &Path) -> ScopeInput {
         ScopeInput {
+            content_enabled: false,
             path: display_path(path),
             recursive: true,
             watch: false,

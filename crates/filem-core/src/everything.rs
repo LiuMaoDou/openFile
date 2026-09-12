@@ -482,6 +482,7 @@ mod tests {
         std::fs::write(root.join("alpha.txt"), "alpha content").unwrap();
         let e = Engine::open(temp.path().join("state/index.sqlite")).unwrap();
         e.add_scope(ScopeInput {
+            content_enabled: false,
             path: root.to_str().unwrap().into(),
             recursive: true,
             watch: false,

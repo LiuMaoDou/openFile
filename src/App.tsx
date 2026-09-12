@@ -21,6 +21,7 @@ import { Sidebar } from "./components/Sidebar";
 import { ScopeDialog } from "./components/ScopeDialog";
 import { Inspector } from "./components/Inspector";
 import { FileTable } from "./components/FileTable";
+import { ContentIndex } from "./components/ContentIndex";
 import { SearchBackend } from "./components/SearchBackend";
 import { MoveDialog } from "./components/MoveDialog";
 import { ScanStatus } from "./components/ScanStatus";
@@ -199,11 +200,27 @@ export default function App() {
               </button>
             </header>
             <div className="toolbar">
+              <select
+                aria-label="搜索模式"
+                value={query.searchMode}
+                onChange={(e) =>
+                  change({ searchMode: e.target.value as Query["searchMode"] })
+                }
+              >
+                <option value="name">文件名 / 路径</option>
+                <option value="content">文件内容</option>
+                <option value="all">文件名 + 内容</option>
+              </select>
               <label className="search-field">
                 <Search size={18} />
                 <input
-                  aria-label="搜索文件名或路径"
-                  placeholder="搜索文件名或路径"
+                  aria-label="搜索关键词"
+                  maxLength={512}
+                  placeholder={
+                    query.searchMode === "name"
+                      ? "搜索文件名或路径"
+                      : "输入内容关键词或完整短语"
+                  }
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                 />
@@ -311,7 +328,21 @@ export default function App() {
                 </label>
               </div>
             )}
-            <SearchBackend changed={refresh} result={result} />
+            {query.searchMode === "name" ? (
+              <SearchBackend changed={refresh} result={result} />
+            ) : (
+              <p className="content-search-notice" role="status">
+                {result.searchNotice ||
+                  "搜索已索引的文档文字；请在下方开启内容索引"}
+              </p>
+            )}
+            {summary.scopes.length > 0 && (
+              <ContentIndex
+                scopeId={query.scopeId}
+                changed={refresh}
+                fail={setError}
+              />
+            )}
             <ScanStatus
               scopes={
                 query.scopeId
@@ -451,6 +482,7 @@ export default function App() {
           </main>
           {selectedActive && (
             <Inspector
+              search={query.search}
               key={selectedActive.id}
               entry={selectedActive}
               close={() => setActive(null)}

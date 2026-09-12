@@ -290,6 +290,7 @@ mod tests {
 
     fn input(path: &Path) -> ScopeInput {
         ScopeInput {
+            content_enabled: false,
             path: path.to_string_lossy().into(),
             recursive: true,
             watch: false,

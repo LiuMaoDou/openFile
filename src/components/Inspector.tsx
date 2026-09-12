@@ -5,12 +5,14 @@ import type { Entry } from "../types";
 import { FileIcon, formatDate, formatSize } from "./FileIcon";
 export function Inspector({
   entry,
+  search,
   close,
   notify,
   fail,
   remove,
 }: {
   entry: Entry;
+  search: string;
   close: () => void;
   notify: (text: string) => void;
   fail: (text: string) => void;
@@ -26,7 +28,7 @@ export function Inspector({
     request.current++;
     setPreview(null);
     setLoading(false);
-  }, [entry.id, entry.mtime, entry.size, entry.online]);
+  }, [entry.id, entry.mtime, entry.size, entry.online, search]);
   const textType = [
     "txt",
     "md",
@@ -50,13 +52,14 @@ export function Inspector({
     "h",
     "sh",
   ].includes(entry.extension);
+  const indexed = entry.contentReady;
   async function loadPreview() {
     const sequence = ++request.current;
     setLoading(true);
     try {
       const result = await command<{ text: string; truncated: boolean }>(
-        "preview_text",
-        { id: entry.id },
+        indexed ? "content_preview" : "preview_text",
+        { id: entry.id, search },
       );
       if (request.current === sequence) setPreview(result);
     } catch (error) {
@@ -110,7 +113,12 @@ export function Inspector({
       <div className="inspector-actions">
         <button
           className="button primary"
-          disabled={!entry.online || entry.placeholder || !textType || loading}
+          disabled={
+            !entry.online ||
+            entry.placeholder ||
+            (!textType && !indexed) ||
+            loading
+          }
           onClick={loadPreview}
         >
           {loading ? "读取中…" : "预览文本"}
@@ -128,7 +136,7 @@ export function Inspector({
           复制路径
         </button>
       </div>
-      {!textType && (
+      {!textType && !indexed && (
         <p className="field-hint">
           此格式暂不提供内置预览，可使用系统应用打开。
         </p>
@@ -154,7 +162,9 @@ export function Inspector({
             </button>
           </header>
           <pre>{preview.text}</pre>
-          {preview.truncated && <p>仅显示前 64 KB。</p>}
+          {preview.truncated && (
+            <p>仅显示部分文字；搜索时优先展示命中位置附近的内容。</p>
+          )}
         </div>
       )}
     </aside>

@@ -50,6 +50,7 @@ fn main() {
     let start = Instant::now();
     let id = engine
         .add_scope(ScopeInput {
+            content_enabled: false,
             path: root.to_string_lossy().into(),
             recursive: true,
             watch: false,

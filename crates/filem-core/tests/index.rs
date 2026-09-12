@@ -12,6 +12,7 @@ use tempfile::TempDir;
 
 fn input(root: &Path) -> ScopeInput {
     ScopeInput {
+        content_enabled: false,
         path: root.to_string_lossy().into(),
         recursive: true,
         watch: false,
@@ -428,6 +429,7 @@ fn folder_facets_are_scoped_without_duplicate_overlap_counts() {
     std::fs::write(b.join("b.png"), "b").unwrap();
     let e = Engine::open(temp.path().join("state/index.sqlite")).unwrap();
     let input = |path: &std::path::Path| ScopeInput {
+        content_enabled: false,
         path: path.to_string_lossy().into(),
         recursive: true,
         watch: false,

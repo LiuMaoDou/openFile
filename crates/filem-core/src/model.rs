@@ -12,6 +12,8 @@ pub const DEFAULT_EXCLUDES: &[&str] = &[
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScopeInput {
+    #[serde(default)]
+    pub content_enabled: bool,
     pub path: String,
     #[serde(default = "yes")]
     pub recursive: bool,
@@ -30,6 +32,8 @@ fn default_excludes() -> Vec<String> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Scope {
+    pub content_enabled: bool,
+    pub content_paused: bool,
     pub id: String,
     pub name: String,
     pub path: String,
@@ -50,6 +54,7 @@ pub struct Query {
     #[serde(skip)]
     pub candidate_ids: Option<Vec<String>>,
     pub search: String,
+    pub search_mode: String,
     pub scope_id: String,
     pub extension: String,
     pub group: String,
@@ -65,6 +70,8 @@ pub struct Query {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Entry {
+    pub content_ready: bool,
+    pub snippet: Option<crate::content::Snippet>,
     pub id: String,
     pub name: String,
     pub directory: String,

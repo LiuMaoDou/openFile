@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ArrowDown,
@@ -41,10 +41,14 @@ export function FileTable({
   const virtualizer = useVirtualizer({
     count: result.entries.length,
     getScrollElement: () => scroll.current,
-    estimateSize: () => 52,
+    estimateSize: () => (query.searchMode !== "name" && query.search ? 76 : 52),
     overscan: 8,
     getItemKey: (index) => result.entries[index].id,
   });
+  const showSnippets = query.searchMode !== "name" && !!query.search;
+  useEffect(() => {
+    virtualizer.measure();
+  }, [virtualizer, showSnippets]);
   const anchor = useRef<string | undefined>(undefined);
   const columns = [
     { key: "name", label: "文件名" },
@@ -189,7 +193,20 @@ export function FileTable({
                       group={entry.group}
                       name={entry.name}
                     />
-                    <span>{entry.name}</span>
+                    <span className="file-title-content">
+                      <span>{entry.name}</span>
+                      {entry.snippet && (
+                        <small
+                          className="content-snippet"
+                          title={`${entry.snippet.before}${entry.snippet.matched}${entry.snippet.after}`}
+                        >
+                          …{entry.snippet.before}
+                          <mark>{entry.snippet.matched}</mark>
+                          {entry.snippet.after}…
+                          {entry.snippet.truncated && "（部分内容）"}
+                        </small>
+                      )}
+                    </span>
                     {entry.placeholder && <Cloud size={14} />}
                   </div>
                   <div role="cell" title={entry.path}>

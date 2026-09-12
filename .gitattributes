@@ -1,0 +1,5 @@
+# Document fixtures must retain their byte offsets and package data on every OS.
+*.pdf binary
+*.docx binary
+*.xlsx binary
+*.pptx binary
