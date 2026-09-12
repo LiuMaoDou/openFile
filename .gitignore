@@ -1,0 +1,10 @@
+node_modules/
+dist/
+releases/
+target/
+.tools/
+.filem/
+.DS_Store
+*.log
+*.tsbuildinfo
+src-tauri/gen/schemas/

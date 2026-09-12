@@ -1,0 +1,4 @@
+[target.x86_64-pc-windows-msvc]
+# Keep the C runtime in the executable so portable users do not need a separate
+# Visual C++ redistributable. Windows system DLLs and WebView2 remain OS runtime dependencies.
+rustflags = ["-C", "target-feature=+crt-static"]

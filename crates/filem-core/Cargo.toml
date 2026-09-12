@@ -1,0 +1,33 @@
+[package]
+name = "filem-core"
+version = "0.1.3"
+edition = "2021"
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rusqlite = { version = "0.37", features = ["bundled"] }
+globset = "0.4"
+notify = "8"
+rayon = "1"
+uuid = { version = "1", features = ["v4"] }
+open = "5"
+sha2 = "0.10"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+trash = { version = "5.2.8", default-features = false }
+
+[target.'cfg(windows)'.dependencies]
+windows-core = "0.62"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_Security"] }
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging", "Win32_System_Registry"] }
+
+[build-dependencies]
+cc = "1"
+
+[dev-dependencies]
+tempfile = "3"

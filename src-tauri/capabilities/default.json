@@ -1,0 +1,1 @@
+{ "identifier": "main-window", "description": "本地文件聚合窗口和用户触发的目录选择", "windows": ["main"], "permissions": ["core:default", "dialog:allow-open"] }
