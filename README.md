@@ -61,7 +61,7 @@ npm run windows:build
 
 安装并运行 Everything 1.4 标准版（非 Lite），等待 Everything 完成自身索引，再勾选列表上方的 **Everything 加速**。官方 SDK 以静态库方式编译到 Windows 应用中，不需要另放 DLL。它查询正在运行的 Everything，不能单独替代 Everything 服务和应用。
 
-初次添加文件夹可先导入最多 2,000 个候选结果，再由本地扫描完整核对。文件名/路径搜索可使用 Everything 的索引；只接受已添加文件夹内、符合排除规则且通过实际文件检查的结果。SDK 未连接、超时、正在处理其他请求或命中超过 50,000 项时，使用本地 SQLite 搜索。搜索文本按字面量处理，尚不暴露 Everything 的高级搜索语法或正文搜索。
+初次添加文件夹可先导入最多 2,000 个候选结果，再由本地扫描完整核对。文件名/路径搜索可使用 Everything 的索引；只接受已添加文件夹内、符合排除规则且通过实际文件检查的结果。兼容 Windows 完整名称与 8.3 短名称混用的文件夹索引。SDK 未连接、超时、正在处理其他请求、命中超过 50,000 项，或 SDK 没命中但本地有结果时，使用本地 SQLite 搜索。搜索文本按字面量处理，尚不暴露 Everything 的高级搜索语法或正文搜索。
 
 macOS 使用本地索引。Everything 的候选路径、授权检查和回退有测试覆盖；Windows 上与运行中的 Everything 的实际 IPC 联动仍待实机验证。来源与许可见 [SDK 目录](crates/filem-core/vendor/everything/SOURCE.md) 和 [官方 SDK 文档](https://www.voidtools.com/support/everything/sdk/)。
 
@@ -102,7 +102,7 @@ npm run bench:index
 
 核心集成测试涵盖文件夹递归与排除、重叠文件夹、隐藏持久化、深层重启补扫、文件替换、离线、排序分页、目录移动、原生监听、符号链接逃逸以及损坏数据库保护。测试与基准只创建临时资料，不操作用户源文件。
 
-删除测试另覆盖只读预览、去重、重叠文件夹索引清理、过期、重复提交、变化/替换文件、文件夹移除、部分失败、停止、中断恢复和无法确认的系统结果。当前在 macOS 上共 45 项核心测试通过；新增统计、移动与 Everything 回退的证据见 [0.1.3 验证记录](docs/Windows_0.1.3_修复记录.md)，原有功能及十万文件基准见 [开发验证记录](docs/FileM_开发验证记录.md)。
+删除测试另覆盖只读预览、去重、重叠文件夹索引清理、过期、重复提交、变化/替换文件、文件夹移除、部分失败、停止、中断恢复和无法确认的系统结果。当前在 macOS 上共 46 项核心测试通过；新增统计、移动与 Everything 回退的证据见 [0.1.3 验证记录](docs/Windows_0.1.3_修复记录.md)，原有功能及十万文件基准见 [开发验证记录](docs/FileM_开发验证记录.md)。
 
 `.github/workflows/check.yml` 执行 Windows/macOS 构建、核心测试、格式与严格 Clippy 检查。Windows 另用隔离的临时目录运行真实 Everything IPC、批量移动及回收站测试；具体提交的状态以 [GitHub Actions](https://github.com/LiuMaoDou/openFile/actions) 为准。
 

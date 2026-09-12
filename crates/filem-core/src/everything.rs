@@ -10,6 +10,8 @@ use std::path::PathBuf;
 #[derive(Serialize, Deserialize, Default)]
 struct Request {
     roots: Vec<Vec<u16>>,
+    #[serde(default)]
+    short_roots: Vec<Vec<u16>>,
     search: String,
     limit: u32,
     probe: bool,
@@ -151,6 +153,14 @@ impl Engine {
                 query.candidate_ids = Some(ids);
                 let c = self.lock()?;
                 let mut result = db::query(&c, &query)?;
+                if result.total == 0 {
+                    let mut local = db::query(&c, q)?;
+                    if local.total > 0 {
+                        local.search_notice =
+                            Some("Everything 尚未覆盖这些结果，已使用本地索引。".into());
+                        return Ok(local);
+                    }
+                }
                 result.search_engine = "everything".into();
                 Ok(result)
             }
@@ -168,6 +178,10 @@ impl Engine {
 fn paths(roots: &[PathBuf], search: &str, limit: u32) -> Result<(Vec<PathBuf>, bool)> {
     use std::os::windows::ffi::{OsStrExt, OsStringExt};
     let request = Request {
+        short_roots: roots
+            .iter()
+            .map(|p| short_root(p).unwrap_or_default())
+            .collect(),
         roots: roots
             .iter()
             .map(|p| shell_path_units(&p.as_os_str().encode_wide().collect::<Vec<_>>()))
@@ -185,6 +199,23 @@ fn paths(roots: &[PathBuf], search: &str, limit: u32) -> Result<(Vec<PathBuf>, b
             .collect(),
         result.truncated,
     ))
+}
+#[cfg(windows)]
+fn short_root(path: &std::path::Path) -> Option<Vec<u16>> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
+    let input: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let size = unsafe { GetShortPathNameW(input.as_ptr(), std::ptr::null_mut(), 0) };
+    if size == 0 || size > 32768 {
+        return None;
+    }
+    let mut output = vec![0; size as usize];
+    let len = unsafe { GetShortPathNameW(input.as_ptr(), output.as_mut_ptr(), size) };
+    if len == 0 || len >= size {
+        return None;
+    }
+    output.truncate(len as usize);
+    shell_path_units(&output).ok()
 }
 #[cfg(not(windows))]
 fn paths(_roots: &[PathBuf], _search: &str, _limit: u32) -> Result<(Vec<PathBuf>, bool)> {
@@ -267,7 +298,7 @@ fn request_fn(input: Request) -> Result<Reply> {
 
 // Keep arbitrary search text literal, and force matching below the selected roots.
 #[cfg(any(windows, test))]
-fn query_pattern(roots: &[Vec<u16>], search: &str) -> Vec<u16> {
+fn query_pattern(roots: &[Vec<u16>], short_roots: &[Vec<u16>], search: &str) -> Vec<u16> {
     fn literal(units: &[u16]) -> Vec<u16> {
         let meta: Vec<u16> = r"\.^$|?*+()[]{}".encode_utf16().collect();
         let mut out = Vec::new();
@@ -290,7 +321,32 @@ fn query_pattern(roots: &[Vec<u16>], search: &str) -> Vec<u16> {
         if root.last() != Some(&(b'\\' as u16)) {
             root.push(b'\\' as u16);
         }
-        out.extend(literal(&root));
+        let mut short = short_roots.get(i).cloned().unwrap_or_default();
+        if short.last() != Some(&(b'\\' as u16)) {
+            short.push(b'\\' as u16);
+        }
+        let components = root.split(|c| *c == b'\\' as u16).collect::<Vec<_>>();
+        let aliases = short.split(|c| *c == b'\\' as u16).collect::<Vec<_>>();
+        for (index, component) in components.iter().enumerate() {
+            if index > 0 {
+                out.extend(literal(&[b'\\' as u16]));
+            }
+            // Everything folder indexes can retain a mixture of long names and
+            // 8.3 aliases. Match either spelling at each level, without expanding
+            // the number of complete root alternatives exponentially.
+            if aliases.len() == components.len()
+                && aliases[index] != *component
+                && !aliases[index].is_empty()
+            {
+                out.extend("(?:".encode_utf16());
+                out.extend(literal(component));
+                out.push(b'|' as u16);
+                out.extend(literal(aliases[index]));
+                out.push(b')' as u16);
+            } else {
+                out.extend(literal(component));
+            }
+        }
     }
     out.extend(")".encode_utf16());
     out.push(0);
@@ -352,7 +408,7 @@ fn helper() -> Result<Reply> {
         {
             bail!("查询参数无效。");
         }
-        let pattern = query_pattern(&input.roots, &input.search);
+        let pattern = query_pattern(&input.roots, &input.short_roots, &input.search);
         Everything_Reset();
         Everything_SetMatchPath(1);
         Everything_SetRegex(1);
@@ -397,7 +453,7 @@ mod tests {
             r"D:\素材".encode_utf16().collect(),
             r"\\server\共享\".encode_utf16().collect(),
         ];
-        let pattern = query_pattern(&roots, "[draft].txt|C:");
+        let pattern = query_pattern(&roots, &[], "[draft].txt|C:");
         let text = String::from_utf16(&pattern[..pattern.len() - 1]).unwrap();
         assert_eq!(
             text,
@@ -405,7 +461,17 @@ mod tests {
         );
         let mut root = r"D:\".encode_utf16().collect::<Vec<_>>();
         root.push(0xdfff);
-        assert!(query_pattern(&[root], "").contains(&0xdfff));
+        assert!(query_pattern(&[root], &[], "").contains(&0xdfff));
+    }
+    #[test]
+    fn root_regex_accepts_mixed_short_and_long_component_spellings() {
+        let long = r"C:\Users\runneradmin\中文 资料".encode_utf16().collect();
+        let short = r"C:\Users\RUNNER~1\ABCDEF~1".encode_utf16().collect();
+        let pattern = query_pattern(&[long], &[short], "draft");
+        assert_eq!(
+            String::from_utf16(&pattern[..pattern.len() - 1]).unwrap(),
+            r"^(?=.*draft)(?:C:\\Users\\(?:runneradmin|RUNNER~1)\\(?:中文 资料|ABCDEF~1)\\)"
+        );
     }
     #[cfg(not(windows))]
     #[test]

@@ -306,7 +306,9 @@ export function DeleteDialog({
                           : moving && item.status === "failed"
                             ? "未移动"
                             : moving && item.status === "blocked"
-                              ? "将跳过"
+                              ? plan.state === "planned"
+                                ? "将跳过"
+                                : "已跳过"
                               : labels[item.status]}
                     </span>
                   </div>
