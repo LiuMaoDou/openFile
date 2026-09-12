@@ -1,4 +1,5 @@
 //! Native CI smoke test. All files and the Everything configuration are disposable.
+#![cfg_attr(windows, windows_subsystem = "windows")]
 fn main() -> anyhow::Result<()> {
     if filem_core::run_helper_if_requested() {
         return Ok(());

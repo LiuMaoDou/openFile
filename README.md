@@ -6,7 +6,7 @@
 
 ## Windows 直接运行
 
-Windows 11 x64 用户可使用 `releases/FileM_0.1.3_x64-setup.exe`，或完整解压 `releases/FileM-0.1.3-windows-x64-portable.zip` 后双击 `FileM.exe`。使用者无需安装 Node.js、Rust 或 Visual Studio。免安装包使用系统 WebView2；安装版会在缺少该运行时时联网安装。使用步骤和版本边界见 [Windows 使用说明](docs/Windows_使用说明.md) 与 [0.1.3 修复与验证记录](docs/Windows_0.1.3_修复记录.md)。分发包保存在本地 `releases/`，不纳入源码版本控制。
+Windows 11 x64 用户可使用 `releases/FileM_0.1.3_x64-setup.exe`，或完整解压 `releases/FileM-0.1.3-windows-x64-portable.zip` 后双击 `FileM.exe`。使用者无需安装 Node.js、Rust 或 Visual Studio。免安装包使用系统 WebView2；安装版会在缺少该运行时时联网安装。使用步骤和版本边界见 [Windows 使用说明](docs/Windows_使用说明.md) 与 [0.1.3 修复与验证记录](docs/Windows_0.1.3_修复记录.md)；逐项检查与修复详见 [代码复查](docs/Windows_0.1.3_代码复查.md)。分发包保存在本地 `releases/`，不纳入源码版本控制。
 
 ## 本地运行
 
@@ -63,7 +63,7 @@ npm run windows:build
 
 初次添加文件夹可先导入最多 2,000 个候选结果，再由本地扫描完整核对。文件名/路径搜索可使用 Everything 的索引；只接受已添加文件夹内、符合排除规则且通过实际文件检查的结果。兼容 Windows 完整名称与 8.3 短名称混用的文件夹索引。SDK 未连接、超时、正在处理其他请求、命中超过 50,000 项，或 SDK 没命中但本地有结果时，使用本地 SQLite 搜索。搜索文本按字面量处理，尚不暴露 Everything 的高级搜索语法或正文搜索。
 
-macOS 使用本地索引。Everything 的候选路径、授权检查和回退有测试覆盖；Windows 上与运行中的 Everything 的实际 IPC 联动仍待实机验证。来源与许可见 [SDK 目录](crates/filem-core/vendor/everything/SOURCE.md) 和 [官方 SDK 文档](https://www.voidtools.com/support/everything/sdk/)。
+macOS 使用本地索引。Everything 的候选路径、授权检查和回退有测试覆盖；Windows CI 已通过与 Everything 1.4.1.1032 的真实 IPC 查询、中文路径及短名称混用检查。来源与许可见 [SDK 目录](crates/filem-core/vendor/everything/SOURCE.md) 和 [官方 SDK 文档](https://www.voidtools.com/support/everything/sdk/)。
 
 ## 批量移动
 
@@ -85,7 +85,7 @@ macOS 使用本地索引。Everything 的候选路径、授权检查和回退有
 
 执行中可以停止后续文件或转到后台，在工具栏的 **删除记录** 中查看结果。停止不会撤销已经完成的文件。成功项从索引和选择中移除，失败项保留；中断或无法确认的项目显示“需要核对”，不会自动重试。
 
-macOS 使用 `NSFileManager`，Windows 使用 STA `IFileOperation` 并要求回收，均不提供永久删除回退。macOS 已用独立测试文件验证实际废纸篓内容和恢复；Windows 分支尚未在 Windows 实机验证。当前仅处理普通文件，不删除目录、链接、占位文件；macOS 非 UTF-8 路径暂不支持删除。
+macOS 使用 `NSFileManager`，Windows 使用 STA `IFileOperation` 并要求回收，均不提供永久删除回退。macOS 已用独立测试文件验证实际废纸篓内容和恢复；Windows CI 已通过对独立临时文件的原生回收测试，用户桌面与其他磁盘仍需验收。当前仅处理普通文件，不删除目录、链接、占位文件；macOS 非 UTF-8 路径暂不支持删除。
 
 恢复请在系统回收站操作。macOS 部分系统不显示“放回原处”，可手动拖回；FileM 不提供自动撤销按钮。这是所用原生方法的已知行为，见 [trash 的 macOS 接口说明](https://docs.rs/trash/latest/trash/macos/enum.DeleteMethod.html)。文件复核与系统路径操作之间仍有并发竞态窗口，不能保证抵御其他进程在最后一刻替换路径。
 

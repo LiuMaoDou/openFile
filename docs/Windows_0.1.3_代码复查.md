@@ -32,7 +32,7 @@
 ## 验证记录
 
 - macOS 核心测试：46 项通过；工作区严格 Clippy、Rust 格式、TypeScript 与 Vite 构建通过。
-- Windows：核心和所有测试/示例目标交叉编译与严格 Clippy 通过。GitHub Windows/macOS 第一轮检查均通过；新版真实 Everything IPC / Windows 回收测试结果以最终 Actions 运行记录为准。
+- Windows：核心和所有测试/示例目标交叉编译与严格 Clippy 通过。GitHub Windows/macOS 检查通过；[Windows 原生测试](https://github.com/LiuMaoDou/openFile/actions/runs/34708776162) 也已通过真实 Everything IPC、路径别名、排除规则、移动与回收站操作。原生测试随后使用 Windows GUI 子系统继续覆盖辅助程序不依赖控制台的场景；最新状态见 [Actions](https://github.com/LiuMaoDou/openFile/actions)。
 - 浏览器：使用 Playwright + 系统 Chrome，实际 Rust API 测试扫描完成状态、分文件夹统计和真实移动；单独用模拟 Windows API 测试开关、回退、过时响应及删除确认。这两类证据不混用。
 - 前端生产依赖：`npm audit --omit=dev` 本次结果为 0 个已报告漏洞；不代表整个依赖链不存在未知问题。
 - Windows 安装包与免安装包另检查架构、依赖 DLL、安装内容、第三方许可、ZIP CRC 和 SHA-256。
