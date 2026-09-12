@@ -18,9 +18,6 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm test
-      - run: npm run check:rust
-      - run: node scripts/cargo.mjs fmt --all -- --check
-      - run: node scripts/cargo.mjs clippy --workspace --all-targets -- -D warnings
       - name: Native Windows and Everything smoke
         if: runner.os == 'Windows'
         timeout-minutes: 3
@@ -37,3 +34,6 @@ jobs:
           $env:FILEM_EVERYTHING_EXE = Join-Path $filemScratch 'Everything.exe'
           node scripts/cargo.mjs run --locked -p filem-core --example windows_smoke
           if ($LASTEXITCODE -ne 0) { throw 'Native Windows smoke failed' }
+      - run: npm run check:rust
+      - run: node scripts/cargo.mjs fmt --all -- --check
+      - run: node scripts/cargo.mjs clippy --workspace --all-targets -- -D warnings

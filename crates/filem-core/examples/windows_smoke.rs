@@ -53,7 +53,7 @@ mod native {
             !engine.everything_status().available,
             "Runner already has an Everything instance; leave it untouched."
         );
-        let ini = temp.path().join("Everything.ini");
+        let ini = std::path::Path::new(&executable).with_file_name("Everything.ini");
         fs::write(&ini, format!("[Everything]\napp_data=0\nrun_as_admin=0\nshow_on_system_tray_double_click=0\ncheck_for_updates_on_startup=0\nauto_include_fixed_volumes=0\nauto_include_removable_volumes=0\nntfs_volume_includes=\nrefs_volume_includes=\nfolders={}\nfolder_monitor_changes=1\nfolder_update_types=0\nexclude_hidden_files_and_folders=0\nexclude_system_files_and_folders=0\netp_server_enabled=0\nhttp_server_enabled=0\n", temp.path().display()))?;
         let _everything = Process(
             Command::new(executable)
@@ -98,6 +98,38 @@ mod native {
             Ok(())
         };
         wait()?;
+        println!(
+            "Smoke source: {:?}, canonical: {:?}",
+            source,
+            source.canonicalize()
+        );
+        for search in ["", "[draft].txt"] {
+            use std::os::windows::ffi::OsStrExt;
+            use std::process::Stdio;
+            let mut helper = Command::new(std::env::current_exe()?)
+                .arg("--filem-everything-helper")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn()?;
+            let request = serde_json::json!({"roots":[source.as_os_str().encode_wide().collect::<Vec<_>>()],"search":search,"limit":50,"probe":false});
+            serde_json::to_writer(helper.stdin.take().unwrap(), &request)?;
+            let output = helper.wait_with_output()?;
+            let reply: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+            let paths = reply["paths"].as_array().map(|paths| {
+                paths
+                    .iter()
+                    .map(|path| {
+                        String::from_utf16_lossy(
+                            &serde_json::from_value::<Vec<u16>>(path.clone()).unwrap(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            });
+            println!(
+                "Raw SDK diagnostic search={search:?}: paths={paths:?}, error={:?}",
+                reply["error"]
+            );
+        }
         let start = Instant::now();
         let found = loop {
             let result = engine.query(&Query {
