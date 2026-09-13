@@ -15,6 +15,7 @@ import {
   X,
 } from "lucide-react";
 import { scanLabel } from "./ScanStatus";
+import { ThemeControl } from "./ThemeControl";
 import type { Query, Scope, Summary } from "../types";
 const groups = [
   { name: "图片", Icon: Image },
@@ -179,9 +180,12 @@ export function Sidebar({
             ))}
         </section>
       </nav>
-      <div className="sidebar-foot">
-        <Check size={13} />
-        仅索引指定文件夹
+      <div className="sidebar-footer">
+        <ThemeControl />
+        <div className="sidebar-foot">
+          <Check size={13} />
+          仅索引指定文件夹
+        </div>
       </div>
     </aside>
   );

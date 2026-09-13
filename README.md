@@ -2,21 +2,25 @@
 
 按用户指定的盘或文件夹聚合相同扩展名文件。索引、筛选和隐藏只改变本地视图，源文件保持原位。
 
-当前版本：**0.1.5 开发验证版**。Rust + SQLite 核心、React 界面与 Tauri 2 桌面壳已实现；Windows 实机验证仍待执行，不能视为 M0/M1 全量验收通过。
+当前版本：**0.1.6 开发验证版**。Rust + SQLite 核心、React 界面与 Tauri 2 桌面壳已实现；Windows 实机验证仍待执行，不能视为 M0/M1 全量验收通过。
 
 ## Intel Mac 直接运行
 
-**[下载 macOS Intel DMG](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.5/FileM_0.1.5_macos-intel.dmg)** · **[下载 macOS Intel ZIP](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.5/FileM-0.1.5-macos-intel.zip)** · [Mac 校验值](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.5/SHA256SUMS-macos-intel.txt)
+**[下载 macOS Intel DMG](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.6/FileM_0.1.6_macos-intel.dmg)** · **[下载 macOS Intel ZIP](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.6/FileM-0.1.6-macos-intel.zip)** · [Mac 校验值](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.6/SHA256SUMS.txt)
 
 适用于 Intel（x86_64）Mac。打开 DMG，将 `FileM.app` 拖入 Applications（应用程序）；也可解压 ZIP 后移入“应用程序”。无需安装 Node.js、Rust、AnyTXT 或 Office。Mac 使用内置本地索引，Everything 加速仅适用于 Windows。
 
-此包未使用 Apple Developer ID 签名，也未经过公证。首次打开若因无法验证开发者而被阻止，在确认下载来源后，可按 [Apple 官方说明](https://support.apple.com/zh-cn/102445)，到“系统设置 → 隐私与安全性 → 仍要打开”。构建与验证范围见 [macOS 0.1.5 修复说明](https://github.com/LiuMaoDou/openFile/releases/tag/v0.1.5)。
+此包未使用 Apple Developer ID 签名，也未经过公证。首次打开若因无法验证开发者而被阻止，在确认下载来源后，可按 [Apple 官方说明](https://support.apple.com/zh-cn/102445)，到“系统设置 → 隐私与安全性 → 仍要打开”。构建与验证范围见 [0.1.6 主题更新说明](https://github.com/LiuMaoDou/openFile/releases/tag/v0.1.6)。
 
 ## Windows 直接运行
 
-**[下载 Windows 安装版](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.4/FileM_0.1.4_x64-setup.exe)** · **[下载免安装 ZIP](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.4/FileM-0.1.4-windows-x64-portable.zip)** · [版本说明与校验值](https://github.com/LiuMaoDou/openFile/releases/tag/v0.1.4)
+**[下载 Windows 安装版](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.6/FileM_0.1.6_x64-setup.exe)** · **[下载免安装 ZIP](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.6/FileM-0.1.6-windows-x64-portable.zip)** · [版本说明与校验值](https://github.com/LiuMaoDou/openFile/releases/tag/v0.1.6)
 
-Windows 11 x64 用户可运行 `FileM_0.1.4_x64-setup.exe`，或完整解压 `FileM-0.1.4-windows-x64-portable.zip` 后双击 `FileM.exe`。使用者无需安装 Node.js、Rust 或 Visual Studio。免安装包使用系统 WebView2；安装版会在缺少该运行时时联网安装。使用步骤和版本边界见 [Windows 使用说明](docs/Windows_使用说明.md) 与 [0.1.4 内容搜索更新说明](docs/Windows_0.1.4_更新说明.md)；此前修复见 [0.1.3 修复与验证记录](docs/Windows_0.1.3_修复记录.md) 和 [代码复查](docs/Windows_0.1.3_代码复查.md)。分发包通过 GitHub Releases 下载，构建产物不纳入源码版本控制。Release 页面中的 Source code 是源码压缩包，不能直接双击运行；Packages 栏目不用于此应用的安装包分发。
+Windows 11 x64 用户可运行 `FileM_0.1.6_x64-setup.exe`，或完整解压 `FileM-0.1.6-windows-x64-portable.zip` 后双击 `FileM.exe`。使用者无需安装 Node.js、Rust 或 Visual Studio。免安装包使用系统 WebView2；安装版会在缺少该运行时时联网安装。使用步骤和版本边界见 [Windows 使用说明](docs/Windows_使用说明.md) 与 [0.1.4 内容搜索更新说明](docs/Windows_0.1.4_更新说明.md)；此前修复见 [0.1.3 修复与验证记录](docs/Windows_0.1.3_修复记录.md) 和 [代码复查](docs/Windows_0.1.3_代码复查.md)。分发包通过 GitHub Releases 下载，构建产物不纳入源码版本控制。Release 页面中的 Source code 是源码压缩包，不能直接双击运行；Packages 栏目不用于此应用的安装包分发。
+
+## 外观主题
+
+在左下角 **外观** 选择 **浅色 / 暗色 / 系统**。默认跟随系统，并随系统外观变化即时切换；手动选择会保存在本机，重启后继续使用。Windows 与 macOS 使用相同的主题，覆盖筛选、列表、文件详情、内容索引和操作弹窗。
 
 ## 本地运行
 
