@@ -6,7 +6,9 @@
 
 ## Windows 直接运行
 
-Windows 11 x64 用户可使用 `releases/FileM_0.1.4_x64-setup.exe`，或完整解压 `releases/FileM-0.1.4-windows-x64-portable.zip` 后双击 `FileM.exe`。使用者无需安装 Node.js、Rust 或 Visual Studio。免安装包使用系统 WebView2；安装版会在缺少该运行时时联网安装。使用步骤和版本边界见 [Windows 使用说明](docs/Windows_使用说明.md) 与 [0.1.4 内容搜索更新说明](docs/Windows_0.1.4_更新说明.md)；此前修复见 [0.1.3 修复与验证记录](docs/Windows_0.1.3_修复记录.md) 和 [代码复查](docs/Windows_0.1.3_代码复查.md)。分发包保存在本地 `releases/`，不纳入源码版本控制。
+**[下载 Windows 安装版](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.4/FileM_0.1.4_x64-setup.exe)** · **[下载免安装 ZIP](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.4/FileM-0.1.4-windows-x64-portable.zip)** · [版本说明与校验值](https://github.com/LiuMaoDou/openFile/releases/tag/v0.1.4)
+
+Windows 11 x64 用户可运行 `FileM_0.1.4_x64-setup.exe`，或完整解压 `FileM-0.1.4-windows-x64-portable.zip` 后双击 `FileM.exe`。使用者无需安装 Node.js、Rust 或 Visual Studio。免安装包使用系统 WebView2；安装版会在缺少该运行时时联网安装。使用步骤和版本边界见 [Windows 使用说明](docs/Windows_使用说明.md) 与 [0.1.4 内容搜索更新说明](docs/Windows_0.1.4_更新说明.md)；此前修复见 [0.1.3 修复与验证记录](docs/Windows_0.1.3_修复记录.md) 和 [代码复查](docs/Windows_0.1.3_代码复查.md)。分发包通过 GitHub Releases 下载，构建产物不纳入源码版本控制。Release 页面中的 Source code 是源码压缩包，不能直接双击运行；Packages 栏目不用于此应用的安装包分发。
 
 ## 本地运行
 
