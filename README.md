@@ -4,6 +4,14 @@
 
 当前版本：**0.1.4 开发验证版**。Rust + SQLite 核心、React 界面与 Tauri 2 桌面壳已实现；Windows 实机验证仍待执行，不能视为 M0/M1 全量验收通过。
 
+## Intel Mac 直接运行
+
+**[下载 macOS Intel DMG](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.4/FileM_0.1.4_macos-intel.dmg)** · **[下载 macOS Intel ZIP](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.4/FileM-0.1.4-macos-intel.zip)** · [Mac 校验值](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.4/SHA256SUMS-macos-intel.txt)
+
+适用于 Intel（x86_64）Mac。打开 DMG，将 `FileM.app` 拖入 Applications（应用程序）；也可解压 ZIP 后移入“应用程序”。无需安装 Node.js、Rust、AnyTXT 或 Office。Mac 使用内置本地索引，Everything 加速仅适用于 Windows。
+
+此包未使用 Apple Developer ID 签名，也未经过公证。首次打开若因无法验证开发者而被阻止，在确认下载来源后，可按 [Apple 官方说明](https://support.apple.com/zh-cn/102445)，到“系统设置 → 隐私与安全性 → 仍要打开”。构建与验证范围见 [macOS Intel 构建记录](docs/macOS_Intel_构建记录.md)。
+
 ## Windows 直接运行
 
 **[下载 Windows 安装版](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.4/FileM_0.1.4_x64-setup.exe)** · **[下载免安装 ZIP](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.4/FileM-0.1.4-windows-x64-portable.zip)** · [版本说明与校验值](https://github.com/LiuMaoDou/openFile/releases/tag/v0.1.4)
