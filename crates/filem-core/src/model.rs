@@ -59,6 +59,24 @@ pub struct ScanProgress {
     pub elapsed_ms: u64,
 }
 
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanRun {
+    pub round: u64,
+    pub scope_ids: Vec<String>,
+    pub reason: String,
+    pub phase: String,
+    pub finished: bool,
+    pub total_directories: Option<u64>,
+    pub discovered_directories: u64,
+    pub processed_directories: u64,
+    pub checked_files: u64,
+    pub visited_entries: u64,
+    pub current_path: String,
+    pub elapsed_ms: u64,
+    pub idle_ms: u64,
+}
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Query {
@@ -116,6 +134,7 @@ pub struct Bucket {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Summary {
+    pub scan_runs: Vec<ScanRun>,
     pub facet_scope_id: String,
     pub facet_hidden: bool,
     pub scan_paused: bool,

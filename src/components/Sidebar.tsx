@@ -1,3 +1,4 @@
+import { version } from "../../package.json";
 import {
   Archive,
   Braces,
@@ -185,6 +186,10 @@ export function Sidebar({
         <div className="sidebar-foot">
           <Check size={13} />
           仅索引指定文件夹
+        </div>
+        <div className="sidebar-version" aria-label={`FileM 版本 ${version}`}>
+          FileM v{version}
+          {import.meta.env.DEV ? " · 开发版" : ""}
         </div>
       </div>
     </aside>

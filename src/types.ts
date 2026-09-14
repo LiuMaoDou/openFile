@@ -7,7 +7,7 @@ export interface ScopeInput {
 }
 export interface Scope extends ScopeInput {
   progress?: {
-    phase: "scanning" | "indexing" | "finalizing";
+    phase: "counting" | "scanning" | "indexing" | "finalizing";
     processedDirectories: number;
     discoveredDirectories: number;
     currentPath: string;
@@ -51,6 +51,7 @@ export interface Bucket {
   count: number;
 }
 export interface Summary {
+  scanRuns: ScanRun[];
   facetScopeId: string;
   facetHidden: boolean;
   scanPaused: boolean;
@@ -62,6 +63,29 @@ export interface Summary {
   hiddenExtensions: Bucket[];
   groups: Bucket[];
   revision: number;
+}
+export interface ScanRun {
+  round: number;
+  scopeIds: string[];
+  reason: string;
+  phase:
+    | "counting"
+    | "scanning"
+    | "indexing"
+    | "finalizing"
+    | "complete"
+    | "partial"
+    | "cancelled"
+    | "failed";
+  finished: boolean;
+  totalDirectories: number | null;
+  discoveredDirectories: number;
+  processedDirectories: number;
+  checkedFiles: number;
+  visitedEntries: number;
+  currentPath: string;
+  elapsedMs: number;
+  idleMs: number;
 }
 export interface Query {
   searchMode: "name" | "content" | "all";
@@ -129,6 +153,7 @@ export const DEFAULT_EXCLUDES = [
   "*.tmp",
 ];
 export const EMPTY_SUMMARY: Summary = {
+  scanRuns: [],
   facetScopeId: "",
   facetHidden: false,
   scanPaused: false,

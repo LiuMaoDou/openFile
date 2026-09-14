@@ -87,6 +87,12 @@ fn overlapping_scopes_share_walk_but_keep_exclusions_and_recursion() {
     assert_eq!(f.names(&flat.0), ["d.txt"]);
     let summary = f.engine.summary().unwrap();
     assert_eq!(summary.total, 6);
+    assert_eq!(summary.scan_runs.len(), 1);
+    let run = &summary.scan_runs[0];
+    assert_eq!(run.total_directories, Some(5));
+    assert_eq!(run.processed_directories, 5);
+    assert_eq!(run.checked_files, 6);
+    assert_eq!(run.phase, "complete");
     for (id, control) in targets {
         let scope = summary.scopes.iter().find(|s| s.id == id).unwrap();
         assert_eq!(scope.freshness, "current");
@@ -315,6 +321,10 @@ fn writer_failure_drops_bounded_queue_and_releases_scan_gate() {
     for i in 0..3000 {
         f.file(&format!("file-{i}.txt"));
     }
+    // A failure on the first write still sees the full directory total.
+    for i in 0..130 {
+        fs::create_dir(f.root.join(format!("empty-{i}"))).unwrap();
+    }
     let target = f.scope("", true, &[]);
     f.engine.lock().unwrap().execute_batch(
         "CREATE TEMP TRIGGER reject_write BEFORE INSERT ON entries BEGIN SELECT RAISE(ABORT,'test write failure'); END;"
@@ -332,6 +342,69 @@ fn writer_failure_drops_bounded_queue_and_releases_scan_gate() {
     worker.join().unwrap();
     let _pause = f.engine.inner.scan_gate.pause();
     assert_eq!(f.engine.summary().unwrap().total, 0);
+    let runs = f.engine.inner.scan_runs.lock().unwrap().snapshot();
+    assert_eq!(runs[0].total_directories, Some(131));
+    assert_eq!(runs[0].checked_files, 0);
+    assert_eq!(runs[0].phase, "failed");
+}
+
+#[test]
+fn separate_pending_roots_share_a_global_plan_and_rescans_have_a_reason() {
+    let f = Fixture::new();
+    f.file("left/deep/a.txt");
+    f.file("right/inner/deeper/b.txt");
+    let left = f.scope("left", true, &[]);
+    let right = f.scope("right", true, &[]);
+    f.engine.scan_pending(&left.0, &left.1).unwrap();
+    let summary = f.engine.summary().unwrap();
+    assert_eq!(summary.total, 2);
+    assert_eq!(summary.scan_runs.len(), 1);
+    let progress = &summary.scan_runs[0];
+    assert_eq!(progress.scope_ids.len(), 2);
+    assert_eq!(progress.total_directories, Some(5));
+    assert_eq!(progress.processed_directories, 5);
+    assert_eq!(progress.checked_files, 2);
+    assert_eq!(progress.phase, "complete");
+    assert!(!right.1.pending.lock().unwrap().full);
+    left.1
+        .pending
+        .lock()
+        .unwrap()
+        .rescan_because("test overflow");
+    f.engine.scan_pending(&left.0, &left.1).unwrap();
+    let runs = f.engine.inner.scan_runs.lock().unwrap().snapshot();
+    assert_eq!(runs[0].round, progress.round + 1);
+    assert_eq!(runs[0].reason, "test overflow");
+    assert_eq!(runs[0].total_directories, Some(2));
+    assert_eq!(runs[0].checked_files, 1);
+    assert_eq!(f.engine.summary().unwrap().total, 2);
+}
+
+#[test]
+fn cancelling_during_directory_count_keeps_old_index_and_no_fake_total() {
+    let f = Fixture::new();
+    f.file("a/b.txt");
+    let target = f.scope("", true, &[]);
+    run(&f.engine, &target.0, &target.1).unwrap();
+    fs::remove_file(f.root.join("a/b.txt")).unwrap();
+    let pause = f.engine.inner.scan_gate.pause();
+    let engine = f.engine.clone();
+    let next = target.clone();
+    let worker = thread::spawn(move || run(&engine, &next.0, &next.1).unwrap());
+    let start = std::time::Instant::now();
+    while target.1.progress.lock().unwrap().is_none() {
+        assert!(start.elapsed() < Duration::from_secs(5));
+        thread::yield_now();
+    }
+    let before = f.engine.summary().unwrap();
+    assert_eq!(before.scan_runs[0].phase, "counting");
+    assert_eq!(before.scan_runs[0].total_directories, None);
+    assert_eq!(before.scan_runs[0].checked_files, 0);
+    f.engine.cancel(&target.0).unwrap();
+    drop(pause);
+    worker.join().unwrap();
+    assert_eq!(f.names(&target.0), ["b.txt"]);
+    assert_eq!(f.engine.summary().unwrap().scan_runs[0].phase, "cancelled");
 }
 
 #[test]

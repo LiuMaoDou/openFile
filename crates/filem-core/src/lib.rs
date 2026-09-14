@@ -12,6 +12,7 @@ mod platform;
 mod rules;
 mod scan;
 mod scan_gate;
+mod scan_progress;
 mod scan_schedule;
 mod watch;
 #[cfg(windows)]
@@ -55,6 +56,7 @@ struct Inner {
     everything_query: Mutex<()>,
     scan_gate: scan_gate::ScanGate,
     scan_scheduler: scan_schedule::Scheduler,
+    scan_runs: Mutex<scan_progress::Registry>,
 }
 pub(crate) struct Control {
     sender: SyncSender<()>,
@@ -273,6 +275,7 @@ impl Engine {
                 everything_query: Mutex::new(()),
                 scan_gate: scan_gate::ScanGate::default(),
                 scan_scheduler: scan_schedule::Scheduler::default(),
+                scan_runs: Mutex::new(scan_progress::Registry::default()),
             }),
         };
         engine.start_content_worker();
@@ -318,6 +321,7 @@ impl Engine {
             }
         };
         summary.scan_paused = self.inner.scan_gate.is_paused();
+        summary.scan_runs = self.inner.scan_runs.lock().unwrap().snapshot();
         let controls = self.inner.controls.lock().unwrap();
         for scope in &mut summary.scopes {
             scope.progress = controls.get(&scope.id).and_then(|control| {
@@ -543,7 +547,7 @@ impl Engine {
             let mut pending = callback_control.pending.lock().unwrap();
             match event {
                 Ok(e) if e.need_rescan() || e.paths.is_empty() && !e.kind.is_access() => {
-                    pending.rescan()
+                    pending.rescan_because("文件监听丢失部分事件，需要完整核对")
                 }
                 Ok(e) if !e.kind.is_access() => {
                     pending.add(e.paths.into_iter().filter(|p| {
@@ -551,7 +555,7 @@ impl Engine {
                             && !rules.matches(p.strip_prefix(&callback_root).unwrap_or(p))
                     }));
                 }
-                Err(_) => pending.rescan(),
+                Err(_) => pending.rescan_because("文件监听报错，需要完整核对"),
                 _ => return,
             }
             if pending.full || !pending.paths.is_empty() {

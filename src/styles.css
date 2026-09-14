@@ -1385,8 +1385,22 @@ main {
   border-radius: 8px;
 }
 .scan-progress-meter > strong {
-  width: 34px;
+  min-width: 42px;
   text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.scan-progress-meter progress:indeterminate {
+  opacity: 0.55;
+}
+.scan-stalled {
+  margin: 8px 0 0;
+  color: var(--warning);
+  line-height: 1.6;
+}
+.sidebar-version {
+  padding: 6px 12px 0;
+  color: var(--muted);
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
 .scan-progress-detail {

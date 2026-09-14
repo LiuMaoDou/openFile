@@ -344,11 +344,8 @@ export default function App() {
               />
             )}
             <ScanStatus
-              scopes={
-                query.scopeId
-                  ? summary.scopes.filter((s) => s.id === query.scopeId)
-                  : summary.scopes
-              }
+              scopes={summary.scopes}
+              runs={summary.scanRuns}
               paused={summary.scanPaused}
             />
             <div className="extension-strip">

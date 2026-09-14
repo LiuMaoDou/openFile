@@ -146,7 +146,9 @@ impl Engine {
         let mut group: Vec<_> = if full {
             eligible
                 .into_iter()
-                .filter(|(_, root, _)| root.starts_with(&leader))
+                // A refresh batch plans all pending roots before indexing any files.
+                // The shared pool still scans directories concurrently; overlapping
+                // roots share one directory plan and one set of observations.
                 .collect()
         } else {
             Vec::new()
@@ -204,7 +206,9 @@ impl Engine {
                     targets.push((scope.clone(), other.clone()));
                 }
             }
-            if let Err(error) = scan::run_group(self, &targets) {
+            if let Err(error) =
+                scan::run_group_with_reason(self, &targets, work.reason.unwrap_or("完整核对"))
+            {
                 for (scope, c) in targets {
                     if !c.removed.load(Ordering::SeqCst) && !c.cancel.load(Ordering::SeqCst) {
                         if let Ok(db) = self.lock() {

@@ -37,6 +37,8 @@ export function useWorkspace(query: Query) {
             previous.facetHidden === next.facetHidden &&
             previous.revision === next.revision &&
             previous.scanPaused === next.scanPaused &&
+            JSON.stringify(previous.scanRuns) ===
+              JSON.stringify(next.scanRuns) &&
             previous.scopes.length === next.scopes.length &&
             previous.scopes.every(
               (scope, index) =>

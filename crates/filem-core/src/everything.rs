@@ -83,26 +83,6 @@ impl Engine {
         }
         Ok(self.everything_status())
     }
-    pub(crate) fn everything_prefill(&self, scope_id: &str) -> Result<()> {
-        if !self.everything_enabled() {
-            return Ok(());
-        }
-        let root = {
-            let c = self.lock()?;
-            let count: u64 = c.query_row(
-                "SELECT COUNT(*) FROM memberships WHERE scope_id=?",
-                [scope_id],
-                |r| r.get(0),
-            )?;
-            if count > 0 {
-                return Ok(());
-            }
-            db::root(&c, scope_id)?.0
-        };
-        let result = paths(&[root], "", 2000)?;
-        crate::scan::index_candidates(self, scope_id, &result.0)?;
-        Ok(())
-    }
     pub(crate) fn query_with_everything(&self, q: &Query) -> Result<QueryResult> {
         if !self.everything_enabled() || q.search.is_empty() {
             return self.query_local(q);

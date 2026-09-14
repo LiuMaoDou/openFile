@@ -135,6 +135,7 @@ pub fn summary_for(c: &Connection, scope_id: &str, hidden: bool) -> Result<Summa
         Ok(result)
     }
     Ok(Summary {
+        scan_runs: Vec::new(),
         scan_paused: false,
         facet_scope_id: scope_id.into(),
         facet_hidden: hidden,

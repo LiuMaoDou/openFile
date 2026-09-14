@@ -3,7 +3,7 @@ use anyhow::{bail, Result};
 use rayon::prelude::*;
 use rusqlite::{params, Connection, OptionalExtension, Params, Row};
 use std::{
-    collections::VecDeque,
+    collections::{HashSet, VecDeque},
     fs,
     path::{Path, PathBuf},
     sync::{
@@ -93,6 +93,7 @@ struct Reader<'a> {
     scopes: &'a [ReadScope],
     storage: &'a Path,
     gate: &'a crate::scan_gate::ScanGate,
+    run: &'a crate::scan_progress::Run,
 }
 impl Reader<'_> {
     fn interrupted(&self) -> bool {
@@ -114,7 +115,7 @@ impl Reader<'_> {
         }
         (files, directories)
     }
-    fn read(&self, dir: &Path, sender: &SyncSender<Vec<Found>>) -> Batch {
+    fn read(&self, dir: &Path, sender: Option<&SyncSender<Vec<Found>>>) -> Batch {
         let mut batch = Batch {
             dirs: Vec::new(),
             failed: Vec::new(),
@@ -122,12 +123,21 @@ impl Reader<'_> {
         if self.interrupted() || self.masks(dir).1 == 0 {
             return batch;
         }
+        let counting = sender.is_none();
+        self.run
+            .update(false, |r| r.current_path = display_path(dir));
         for scope in self
             .scopes
             .iter()
             .filter(|s| s.live() && s.includes(dir, true))
         {
-            progress(&scope.control, "scanning", dir, 0, 0);
+            progress(
+                &scope.control,
+                if counting { "counting" } else { "scanning" },
+                dir,
+                0,
+                0,
+            );
         }
         let safe = fs::symlink_metadata(dir)
             .is_ok_and(|m| m.is_dir() && !m.file_type().is_symlink() && !reparse(attributes(&m)))
@@ -150,6 +160,7 @@ impl Reader<'_> {
             }
         };
         let mut files = Vec::with_capacity(READ_CHUNK);
+        let mut visited = 0;
         for item in iter {
             if self.interrupted() {
                 break;
@@ -162,12 +173,32 @@ impl Reader<'_> {
                 }
             };
             let path = item.path();
+            visited += 1;
+            if visited == READ_CHUNK {
+                self.run.update(true, |r| {
+                    r.visited_entries += visited as u64;
+                    r.current_path = display_path(&path);
+                });
+                visited = 0;
+            }
             if path.starts_with(self.storage) {
                 continue;
             }
             let (file_mask, dir_mask) = self.masks(&path);
             if file_mask | dir_mask == 0 {
                 continue;
+            }
+            // Directory planning never opens files for identity or reads content.
+            // file_type is supplied by enumeration on Windows and common Unix FSs.
+            if counting {
+                match item.file_type() {
+                    Ok(kind) if !kind.is_dir() || kind.is_symlink() => continue,
+                    Err(_) => {
+                        batch.failed.push(path);
+                        continue;
+                    }
+                    _ => {}
+                }
             }
             // This never follows symlinks, and reuses enumeration metadata on Windows.
             let meta = match item.metadata() {
@@ -187,7 +218,7 @@ impl Reader<'_> {
                 } else {
                     batch.dirs.push(path);
                 }
-            } else if meta.is_file() && file_mask != 0 {
+            } else if !counting && meta.is_file() && file_mask != 0 {
                 match identity(&path, &meta) {
                     Ok(identity) => files.push(Found {
                         path,
@@ -200,6 +231,7 @@ impl Reader<'_> {
             }
             if files.len() == READ_CHUNK
                 && sender
+                    .unwrap()
                     .send(std::mem::replace(
                         &mut files,
                         Vec::with_capacity(READ_CHUNK),
@@ -209,8 +241,12 @@ impl Reader<'_> {
                 return batch;
             }
         }
+        if visited > 0 {
+            self.run
+                .update(true, |r| r.visited_entries += visited as u64);
+        }
         if !files.is_empty() && !self.interrupted() {
-            let _ = sender.send(files);
+            let _ = sender.unwrap().send(files);
         }
         batch
     }
@@ -221,12 +257,31 @@ pub(crate) struct ScanStats {
     pub files: u64,
 }
 pub(crate) fn run(engine: &Engine, id: &str, control: &Arc<Control>) -> Result<()> {
-    run_group(engine, &[(id.to_owned(), control.clone())]).map(|_| ())
+    run_group_with_reason(
+        engine,
+        &[(id.to_owned(), control.clone())],
+        "文件夹变化或增量核对无法完成，需要完整核对",
+    )
+    .map(|_| ())
 }
+#[cfg(test)]
 pub(crate) fn run_group(
     engine: &Engine,
     requested: &[(String, Arc<Control>)],
 ) -> Result<ScanStats> {
+    run_group_with_reason(engine, requested, "手动刷新或启动核对")
+}
+pub(crate) fn run_group_with_reason(
+    engine: &Engine,
+    requested: &[(String, Arc<Control>)],
+    reason: &str,
+) -> Result<ScanStats> {
+    let run = engine
+        .inner
+        .scan_runs
+        .lock()
+        .unwrap()
+        .start(requested.iter().map(|(id, _)| id.clone()).collect(), reason);
     let mut scopes = Vec::new();
     for (id, control) in requested {
         if control.cancel.load(Ordering::SeqCst) || control.removed.load(Ordering::SeqCst) {
@@ -238,6 +293,7 @@ pub(crate) fn run_group(
             Err(_) if control.removed.load(Ordering::SeqCst) => continue,
             Err(error) => return Err(error),
         };
+        run.update(false, |r| r.current_path = display_path(&root));
         let meta = match fs::metadata(&root) {
             Ok(meta) => meta,
             Err(error) => {
@@ -282,15 +338,31 @@ pub(crate) fn run_group(
     }
     let mut stats = ScanStats::default();
     if scopes.is_empty() {
+        run.finish(
+            if requested
+                .iter()
+                .all(|(_, c)| c.cancel.load(Ordering::SeqCst) || c.removed.load(Ordering::SeqCst))
+            {
+                "cancelled"
+            } else {
+                "partial"
+            },
+        );
         return Ok(stats);
     }
-    let roots: Vec<_> = scopes.iter().map(|s| s.root.clone()).collect();
+    let roots: Vec<_> = scopes
+        .iter()
+        .map(|s| s.root.clone())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    run.update(false, |r| r.discovered_directories = roots.len() as u64);
     let mut guards = Vec::new();
     for scope in &scopes {
         *scope.control.progress.lock().unwrap() = Some((
             std::time::Instant::now(),
             model::ScanProgress {
-                phase: "scanning".into(),
+                phase: "counting".into(),
                 processed_directories: 0,
                 discovered_directories: roots.iter().filter(|p| scope.includes(p, true)).count()
                     as u64,
@@ -299,10 +371,6 @@ pub(crate) fn run_group(
             },
         ));
         guards.push(ProgressGuard(&scope.control));
-        // Grouped scans already stream shared observations; avoid duplicate prefill.
-        if scopes.len() == 1 {
-            let _ = engine.everything_prefill(&scope.id);
-        }
     }
     let generation = uuid::Uuid::new_v4().to_string();
     let mut writes: Vec<_> = scopes
@@ -330,10 +398,65 @@ pub(crate) fn run_group(
         scopes: &scopes,
         storage: &engine.inner.storage,
         gate: &engine.inner.scan_gate,
+        run: &run,
     };
     let mut queue = VecDeque::from(roots.clone());
     let mut failed = Vec::new();
     let started = std::time::Instant::now();
+    // Freeze a directory work list first. Only directory paths are retained, not
+    // file metadata, so memory stays proportional to directory count.
+    let mut planned: HashSet<PathBuf> = roots.iter().cloned().collect();
+    let mut plan = VecDeque::new();
+    while !queue.is_empty() {
+        let _permit = engine.inner.scan_gate.enter();
+        if !scopes.iter().any(ReadScope::live) {
+            break;
+        }
+        if reader.interrupted() {
+            continue;
+        }
+        let dirs: Vec<_> = (0..queue.len().min(64))
+            .filter_map(|_| queue.pop_front())
+            .collect();
+        let batches = engine.inner.pool.install(|| {
+            dirs.par_iter()
+                .map(|dir| reader.read(dir, None))
+                .collect::<Vec<_>>()
+        });
+        if engine.inner.scan_gate.is_paused() {
+            queue.extend(dirs);
+            continue;
+        }
+        plan.extend(dirs);
+        let mut discovered = Vec::new();
+        for batch in batches {
+            failed.extend(batch.failed);
+            for dir in batch.dirs {
+                if planned.insert(dir.clone()) {
+                    discovered.push(dir);
+                }
+            }
+        }
+        run.update(true, |r| r.discovered_directories = planned.len() as u64);
+        for scope in scopes.iter().filter(|s| s.live()) {
+            if let Some((_, p)) = scope.control.progress.lock().unwrap().as_mut() {
+                p.discovered_directories += discovered
+                    .iter()
+                    .filter(|p| scope.includes(p, true))
+                    .count() as u64;
+            }
+        }
+        queue.extend(discovered);
+    }
+    if !scopes.iter().any(ReadScope::live) {
+        run.finish("cancelled");
+        return Ok(stats);
+    }
+    run.update(true, |r| {
+        r.total_directories = Some(plan.len() as u64);
+        r.phase = "scanning".into();
+    });
+    queue = plan;
     let mut writing = std::time::Duration::ZERO;
     while !queue.is_empty() {
         // File operations drain both producers and the writer before changing files.
@@ -348,6 +471,7 @@ pub(crate) fn run_group(
             .filter_map(|_| queue.pop_front())
             .collect();
         let counts: Vec<_> = writes.iter().map(|s| s.count).collect();
+        let previous_files = stats.files;
         let batches = std::thread::scope(|threads| -> Result<Vec<Batch>> {
             let (sender, receiver) = sync_channel(engine.inner.pool.current_num_threads() * 2);
             let read_dirs = &dirs;
@@ -356,7 +480,7 @@ pub(crate) fn run_group(
                 engine.inner.pool.install(|| {
                     read_dirs
                         .par_iter()
-                        .map(|dir| read.read(dir, &sender))
+                        .map(|dir| read.read(dir, Some(&sender)))
                         .collect::<Vec<_>>()
                 })
             });
@@ -385,7 +509,9 @@ pub(crate) fn run_group(
                             );
                         }
                         let start = std::time::Instant::now();
+                        run.update(false, |r| r.phase = "indexing".into());
                         write_batch(engine, &mut writes, &files)?;
+                        run.update(true, |r| r.checked_files += files.len() as u64);
                         writing += start.elapsed();
                         files.clear();
                     }
@@ -393,7 +519,9 @@ pub(crate) fn run_group(
             }
             if !files.is_empty() && !reader.interrupted() {
                 let start = std::time::Instant::now();
+                run.update(false, |r| r.phase = "indexing".into());
                 write_batch(engine, &mut writes, &files)?;
+                run.update(true, |r| r.checked_files += files.len() as u64);
                 writing += start.elapsed();
             }
             Ok(producer.join().expect("scan reader panicked"))
@@ -403,13 +531,19 @@ pub(crate) fn run_group(
                 scope.count = count;
             }
             queue.extend(dirs);
+            stats.files = previous_files;
+            run.update(false, |r| r.checked_files = previous_files);
             continue;
         }
         stats.directories += dirs.len() as u64;
+        run.update(true, |r| {
+            r.processed_directories = stats.directories;
+            r.phase = "scanning".into();
+        });
         let discovered: Vec<_> = batches
             .iter()
             .flat_map(|b| &b.dirs)
-            .filter(|p| !roots.contains(p))
+            .filter(|p| !planned.contains(*p))
             .cloned()
             .collect();
         for scope in scopes.iter().filter(|s| s.live()) {
@@ -419,19 +553,21 @@ pub(crate) fn run_group(
                     "scanning",
                     path,
                     dirs.iter().filter(|p| scope.includes(p, true)).count() as u64,
-                    discovered
-                        .iter()
-                        .filter(|p| scope.includes(p, true))
-                        .count() as u64,
+                    0,
                 );
             }
         }
-        queue.extend(discovered);
+        // Changes after planning belong to the next watch pass. Preserve prior
+        // memberships beneath these paths if watching is disabled or delayed.
+        failed.extend(discovered);
         for batch in batches {
             failed.extend(batch.failed);
         }
     }
     let _permit = engine.inner.scan_gate.enter();
+    run.update(false, |r| r.phase = "finalizing".into());
+    let mut incomplete =
+        !failed.is_empty() || scopes.len() != requested.len() || scopes.iter().any(|s| !s.live());
     for (scope, write) in scopes.iter().zip(&writes).filter(|(s, _)| s.live()) {
         let result = (|| -> Result<()> {
             if !fs::metadata(&scope.root)
@@ -460,6 +596,7 @@ pub(crate) fn run_group(
             )
         })();
         if let Err(error) = result {
+            incomplete = true;
             let c = engine.lock()?;
             if scope.live() {
                 db::set_state(
@@ -472,6 +609,13 @@ pub(crate) fn run_group(
             }
         }
     }
+    run.finish(if scopes.iter().all(|s| !s.live()) {
+        "cancelled"
+    } else if incomplete {
+        "partial"
+    } else {
+        "complete"
+    });
     if std::env::var_os("FILEM_SCAN_PROFILE").is_some() {
         eprintln!(
             "FILEM_SCAN_PROFILE {}",
