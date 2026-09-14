@@ -12,6 +12,7 @@ mod platform;
 mod rules;
 mod scan;
 mod scan_gate;
+mod scan_schedule;
 mod watch;
 #[cfg(windows)]
 mod windows_shell;
@@ -53,6 +54,7 @@ struct Inner {
     file_operations: Mutex<()>,
     everything_query: Mutex<()>,
     scan_gate: scan_gate::ScanGate,
+    scan_scheduler: scan_schedule::Scheduler,
 }
 pub(crate) struct Control {
     sender: SyncSender<()>,
@@ -270,6 +272,7 @@ impl Engine {
                 file_operations: Mutex::new(()),
                 everything_query: Mutex::new(()),
                 scan_gate: scan_gate::ScanGate::default(),
+                scan_scheduler: scan_schedule::Scheduler::default(),
             }),
         };
         engine.start_content_worker();
@@ -493,30 +496,7 @@ impl Engine {
                     break;
                 };
                 let engine = Engine { inner };
-                let work = {
-                    let mut pending = control.pending.lock().unwrap();
-                    control.dirty.store(false, Ordering::SeqCst);
-                    std::mem::take(&mut *pending)
-                };
-                let result = if work.full {
-                    scan::run(&engine, &id, &control)
-                } else if work.paths.is_empty() {
-                    Ok(())
-                } else {
-                    scan::update_files(
-                        &engine,
-                        &id,
-                        &control,
-                        &work.paths.into_iter().collect::<Vec<_>>(),
-                    )
-                    .and_then(|handled| {
-                        if handled {
-                            Ok(())
-                        } else {
-                            scan::run(&engine, &id, &control)
-                        }
-                    })
-                };
+                let result = engine.scan_pending(&id, &control);
                 if let Err(error) = result {
                     if let Ok(c) = engine.lock() {
                         let _ = db::set_state(

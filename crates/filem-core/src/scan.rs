@@ -6,7 +6,11 @@ use std::{
     collections::VecDeque,
     fs,
     path::{Path, PathBuf},
-    sync::{atomic::Ordering, Arc},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc::{sync_channel, SyncSender},
+        Arc,
+    },
 };
 
 fn execute_cached(c: &Connection, sql: &str, params: impl Params) -> rusqlite::Result<usize> {
@@ -25,9 +29,11 @@ struct Found {
     path: PathBuf,
     meta: fs::Metadata,
     identity: String,
+    scopes: u32,
 }
+const READ_CHUNK: usize = 256;
+const WRITE_CHUNK: usize = 512;
 struct Batch {
-    files: Vec<Found>,
     dirs: Vec<PathBuf>,
     failed: Vec<PathBuf>,
 }
@@ -38,225 +44,442 @@ impl Drop for ProgressGuard<'_> {
     }
 }
 fn progress(control: &Control, phase: &str, path: &Path, processed: u64, discovered: u64) {
-    if let Some((_, progress)) = control.progress.lock().unwrap().as_mut() {
-        progress.phase = phase.into();
-        progress.current_path = display_path(path);
-        progress.processed_directories += processed;
-        progress.discovered_directories += discovered;
+    if let Some((_, p)) = control.progress.lock().unwrap().as_mut() {
+        p.phase = phase.into();
+        p.current_path = display_path(path);
+        p.processed_directories += processed;
+        p.discovered_directories += discovered;
     }
 }
-fn read_dir(
-    dir: &Path,
-    root: &Path,
-    rules: &Excludes,
+struct ReadScope {
+    id: String,
+    root: PathBuf,
+    identity: String,
+    version: i64,
     recursive: bool,
-    storage: &Path,
-    gate: &crate::scan_gate::ScanGate,
-    control: &Control,
-) -> Batch {
-    progress(control, "scanning", dir, 0, 0);
-    let mut batch = Batch {
-        files: Vec::new(),
-        dirs: Vec::new(),
-        failed: Vec::new(),
-    };
-    let safe = fs::symlink_metadata(dir)
-        .is_ok_and(|m| m.is_dir() && !m.file_type().is_symlink() && !reparse(attributes(&m)))
-        && dir
-            .canonicalize()
-            .is_ok_and(|p| p.starts_with(root) && !p.starts_with(storage));
-    if !safe {
-        batch.failed.push(dir.into());
-        return batch;
+    watch: bool,
+    rules: Excludes,
+    control: Arc<Control>,
+    valid: AtomicBool,
+}
+impl ReadScope {
+    fn live(&self) -> bool {
+        self.valid.load(Ordering::SeqCst)
+            && !self.control.cancel.load(Ordering::SeqCst)
+            && !self.control.removed.load(Ordering::SeqCst)
     }
-    let iter = match fs::read_dir(dir) {
-        Ok(i) => i,
-        Err(_) => {
+    fn includes(&self, path: &Path, directory: bool) -> bool {
+        self.inclusion(path) & if directory { 2 } else { 1 } != 0
+    }
+    // Determine file/directory eligibility together: exclusion matching can be
+    // expensive and does not need to run twice for every directory entry.
+    fn inclusion(&self, path: &Path) -> u8 {
+        let Ok(relative) = path.strip_prefix(&self.root) else {
+            return 0;
+        };
+        if relative.as_os_str().is_empty() {
+            return 2;
+        }
+        if (!self.recursive && relative.components().count() != 1) || self.rules.matches(relative) {
+            0
+        } else if self.recursive {
+            3
+        } else {
+            1
+        }
+    }
+}
+struct Reader<'a> {
+    scopes: &'a [ReadScope],
+    storage: &'a Path,
+    gate: &'a crate::scan_gate::ScanGate,
+}
+impl Reader<'_> {
+    fn interrupted(&self) -> bool {
+        self.gate.is_paused() || !self.scopes.iter().any(ReadScope::live)
+    }
+    fn masks(&self, path: &Path) -> (u32, u32) {
+        let mut files = 0;
+        let mut directories = 0;
+        for (i, scope) in self.scopes.iter().enumerate() {
+            if scope.live() {
+                let inclusion = scope.inclusion(path);
+                if inclusion & 1 != 0 {
+                    files |= 1 << i;
+                }
+                if inclusion & 2 != 0 {
+                    directories |= 1 << i;
+                }
+            }
+        }
+        (files, directories)
+    }
+    fn read(&self, dir: &Path, sender: &SyncSender<Vec<Found>>) -> Batch {
+        let mut batch = Batch {
+            dirs: Vec::new(),
+            failed: Vec::new(),
+        };
+        if self.interrupted() || self.masks(dir).1 == 0 {
+            return batch;
+        }
+        for scope in self
+            .scopes
+            .iter()
+            .filter(|s| s.live() && s.includes(dir, true))
+        {
+            progress(&scope.control, "scanning", dir, 0, 0);
+        }
+        let safe = fs::symlink_metadata(dir)
+            .is_ok_and(|m| m.is_dir() && !m.file_type().is_symlink() && !reparse(attributes(&m)))
+            && dir.canonicalize().is_ok_and(|p| {
+                !p.starts_with(self.storage)
+                    && self
+                        .scopes
+                        .iter()
+                        .any(|s| s.live() && p.starts_with(&s.root))
+            });
+        if !safe {
             batch.failed.push(dir.into());
             return batch;
         }
-    };
-    for item in iter {
-        if gate.is_paused() {
-            break;
-        }
-        let item = match item {
-            Ok(i) => i,
+        let iter = match fs::read_dir(dir) {
+            Ok(iter) => iter,
             Err(_) => {
                 batch.failed.push(dir.into());
-                continue;
+                return batch;
             }
         };
-        let path = item.path();
-        if path.starts_with(storage) || rules.matches(path.strip_prefix(root).unwrap_or(&path)) {
-            continue;
-        }
-        let meta = match fs::symlink_metadata(&path) {
-            Ok(m) => m,
-            Err(_) => {
-                batch.failed.push(path);
+        let mut files = Vec::with_capacity(READ_CHUNK);
+        for item in iter {
+            if self.interrupted() {
+                break;
+            }
+            let item = match item {
+                Ok(item) => item,
+                Err(_) => {
+                    batch.failed.push(dir.into());
+                    continue;
+                }
+            };
+            let path = item.path();
+            if path.starts_with(self.storage) {
                 continue;
             }
-        };
-        let attrs = attributes(&meta);
-        if meta.file_type().is_symlink() {
-            continue;
-        }
-        if meta.is_dir() {
-            if recursive {
+            let (file_mask, dir_mask) = self.masks(&path);
+            if file_mask | dir_mask == 0 {
+                continue;
+            }
+            // This never follows symlinks, and reuses enumeration metadata on Windows.
+            let meta = match item.metadata() {
+                Ok(m) => m,
+                Err(_) => {
+                    batch.failed.push(path);
+                    continue;
+                }
+            };
+            let attrs = attributes(&meta);
+            if meta.file_type().is_symlink() {
+                continue;
+            }
+            if meta.is_dir() && dir_mask != 0 {
                 if reparse(attrs) || placeholder(attrs) {
                     batch.failed.push(path);
                 } else {
                     batch.dirs.push(path);
                 }
+            } else if meta.is_file() && file_mask != 0 {
+                match identity(&path, &meta) {
+                    Ok(identity) => files.push(Found {
+                        path,
+                        meta,
+                        identity,
+                        scopes: file_mask,
+                    }),
+                    Err(_) => batch.failed.push(path),
+                }
             }
-        } else if meta.is_file() {
-            match identity(&path, &meta) {
-                Ok(identity) => batch.files.push(Found {
-                    path,
-                    meta,
-                    identity,
-                }),
-                Err(_) => batch.failed.push(path),
+            if files.len() == READ_CHUNK
+                && sender
+                    .send(std::mem::replace(
+                        &mut files,
+                        Vec::with_capacity(READ_CHUNK),
+                    ))
+                    .is_err()
+            {
+                return batch;
             }
         }
+        if !files.is_empty() && !self.interrupted() {
+            let _ = sender.send(files);
+        }
+        batch
     }
-    batch
+}
+#[derive(Default)]
+pub(crate) struct ScanStats {
+    pub directories: u64,
+    pub files: u64,
 }
 pub(crate) fn run(engine: &Engine, id: &str, control: &Arc<Control>) -> Result<()> {
-    let (root, root_identity, version, input) = {
-        let c = engine.lock()?;
-        db::root(&c, id)?
-    };
-    let meta = match fs::metadata(&root) {
-        Ok(m) => m,
-        Err(e) => {
-            let c = engine.lock()?;
-            db::set_state(
-                &c,
-                id,
-                if e.kind() == std::io::ErrorKind::PermissionDenied {
-                    "access_denied"
-                } else {
-                    "offline"
-                },
-                "partial",
-                Some(&e.to_string()),
-            )?;
-            return Ok(());
+    run_group(engine, &[(id.to_owned(), control.clone())]).map(|_| ())
+}
+pub(crate) fn run_group(
+    engine: &Engine,
+    requested: &[(String, Arc<Control>)],
+) -> Result<ScanStats> {
+    let mut scopes = Vec::new();
+    for (id, control) in requested {
+        if control.cancel.load(Ordering::SeqCst) || control.removed.load(Ordering::SeqCst) {
+            continue;
         }
-    };
-    if identity(&root, &meta)? != root_identity {
-        let c = engine.lock()?;
-        db::set_state(
-            &c,
-            id,
-            "identity_changed",
-            "partial",
-            Some("根目录身份发生变化，请移除后重新选择文件夹。"),
-        )?;
-        return Ok(());
+        let root_info = { db::root(&*engine.lock()?, id) };
+        let (root, expected, version, input) = match root_info {
+            Ok(info) => info,
+            Err(_) if control.removed.load(Ordering::SeqCst) => continue,
+            Err(error) => return Err(error),
+        };
+        let meta = match fs::metadata(&root) {
+            Ok(meta) => meta,
+            Err(error) => {
+                db::set_state(
+                    &*engine.lock()?,
+                    id,
+                    if error.kind() == std::io::ErrorKind::PermissionDenied {
+                        "access_denied"
+                    } else {
+                        "offline"
+                    },
+                    "partial",
+                    Some(&error.to_string()),
+                )?;
+                continue;
+            }
+        };
+        if !identity(&root, &meta).is_ok_and(|value| value == expected) {
+            db::set_state(
+                &*engine.lock()?,
+                id,
+                "identity_changed",
+                "partial",
+                Some("根目录身份发生变化，请移除后重新选择文件夹。"),
+            )?;
+            continue;
+        }
+        scopes.push(ReadScope {
+            id: id.clone(),
+            root,
+            identity: expected,
+            version,
+            recursive: input.recursive,
+            watch: input.watch,
+            rules: Excludes::new(&input.excludes)?,
+            control: control.clone(),
+            valid: true.into(),
+        });
     }
-    *control.progress.lock().unwrap() = Some((
-        std::time::Instant::now(),
-        model::ScanProgress {
-            phase: "scanning".into(),
-            processed_directories: 0,
-            discovered_directories: 1,
-            current_path: display_path(&root),
-            elapsed_ms: 0,
-        },
-    ));
-    let _progress = ProgressGuard(control);
-    let _ = engine.everything_prefill(id);
-    let rules = Excludes::new(&input.excludes)?;
+    if scopes.len() > 32 {
+        bail!("扫描范围过多");
+    }
+    let mut stats = ScanStats::default();
+    if scopes.is_empty() {
+        return Ok(stats);
+    }
+    let roots: Vec<_> = scopes.iter().map(|s| s.root.clone()).collect();
+    let mut guards = Vec::new();
+    for scope in &scopes {
+        *scope.control.progress.lock().unwrap() = Some((
+            std::time::Instant::now(),
+            model::ScanProgress {
+                phase: "scanning".into(),
+                processed_directories: 0,
+                discovered_directories: roots.iter().filter(|p| scope.includes(p, true)).count()
+                    as u64,
+                current_path: display_path(&scope.root),
+                elapsed_ms: 0,
+            },
+        ));
+        guards.push(ProgressGuard(&scope.control));
+        // Grouped scans already stream shared observations; avoid duplicate prefill.
+        if scopes.len() == 1 {
+            let _ = engine.everything_prefill(&scope.id);
+        }
+    }
     let generation = uuid::Uuid::new_v4().to_string();
+    let mut writes: Vec<_> = scopes
+        .iter()
+        .map(|s| WriteScope {
+            id: &s.id,
+            version: s.version,
+            generation: &generation,
+            plan: Some(s),
+            count: 0,
+        })
+        .collect();
     {
         let mut c = engine.lock()?;
         let tx = c.transaction()?;
-        db::set_state(&tx, id, "available", "scanning", None)?;
-        tx.execute("UPDATE scopes SET scanned=0 WHERE id=?", [id])?;
+        for s in &scopes {
+            if s.live() {
+                db::set_state(&tx, &s.id, "available", "scanning", None)?;
+                tx.execute("UPDATE scopes SET scanned=0 WHERE id=?", [&s.id])?;
+            }
+        }
         tx.commit()?;
     }
-    let mut queue = VecDeque::from([root.clone()]);
+    let reader = Reader {
+        scopes: &scopes,
+        storage: &engine.inner.storage,
+        gate: &engine.inner.scan_gate,
+    };
+    let mut queue = VecDeque::from(roots.clone());
     let mut failed = Vec::new();
-    let mut count = 0usize;
-    'scan: while !queue.is_empty() {
+    let started = std::time::Instant::now();
+    let mut writing = std::time::Duration::ZERO;
+    while !queue.is_empty() {
+        // File operations drain both producers and the writer before changing files.
         let _permit = engine.inner.scan_gate.enter();
-        if control.cancel.load(Ordering::SeqCst) || control.removed.load(Ordering::SeqCst) {
-            bail!("扫描已取消，保留已发现文件与上次索引。");
+        if !scopes.iter().any(ReadScope::live) {
+            break;
+        }
+        if engine.inner.scan_gate.is_paused() {
+            continue;
         }
         let dirs: Vec<_> = (0..queue.len().min(64))
             .filter_map(|_| queue.pop_front())
             .collect();
-        let mut batches = engine.inner.pool.install(|| {
-            dirs.par_iter()
-                .map(|d| {
-                    read_dir(
-                        d,
-                        &root,
-                        &rules,
-                        input.recursive,
-                        &engine.inner.storage,
-                        &engine.inner.scan_gate,
-                        control,
-                    )
+        let counts: Vec<_> = writes.iter().map(|s| s.count).collect();
+        let batches = std::thread::scope(|threads| -> Result<Vec<Batch>> {
+            let (sender, receiver) = sync_channel(engine.inner.pool.current_num_threads() * 2);
+            let read_dirs = &dirs;
+            let read = &reader;
+            let producer = threads.spawn(move || {
+                engine.inner.pool.install(|| {
+                    read_dirs
+                        .par_iter()
+                        .map(|dir| read.read(dir, &sender))
+                        .collect::<Vec<_>>()
                 })
-                .collect::<Vec<_>>()
-        });
+            });
+            let mut files = Vec::with_capacity(WRITE_CHUNK);
+            for chunk in receiver {
+                if reader.interrupted() {
+                    break;
+                }
+                stats.files += chunk.len() as u64;
+                for file in chunk {
+                    files.push(file);
+                    if files.len() == WRITE_CHUNK {
+                        if reader.interrupted() {
+                            break;
+                        }
+                        for scope in scopes
+                            .iter()
+                            .filter(|s| s.live() && s.includes(&files[0].path, false))
+                        {
+                            progress(
+                                &scope.control,
+                                "indexing",
+                                files[0].path.parent().unwrap(),
+                                0,
+                                0,
+                            );
+                        }
+                        let start = std::time::Instant::now();
+                        write_batch(engine, &mut writes, &files)?;
+                        writing += start.elapsed();
+                        files.clear();
+                    }
+                }
+            }
+            if !files.is_empty() && !reader.interrupted() {
+                let start = std::time::Instant::now();
+                write_batch(engine, &mut writes, &files)?;
+                writing += start.elapsed();
+            }
+            Ok(producer.join().expect("scan reader panicked"))
+        })?;
         if engine.inner.scan_gate.is_paused() {
+            for (scope, count) in writes.iter_mut().zip(counts) {
+                scope.count = count;
+            }
             queue.extend(dirs);
             continue;
         }
-        let count_before_batch = count;
-        let mut files = Vec::new();
-        for batch in &mut batches {
-            files.append(&mut batch.files);
-        }
-        for chunk in files.chunks(512) {
-            if engine.inner.scan_gate.is_paused() {
-                // Re-read after deletion; never retain pre-delete metadata across the pause.
-                count = count_before_batch;
-                queue.extend(dirs.iter().cloned());
-                continue 'scan;
+        stats.directories += dirs.len() as u64;
+        let discovered: Vec<_> = batches
+            .iter()
+            .flat_map(|b| &b.dirs)
+            .filter(|p| !roots.contains(p))
+            .cloned()
+            .collect();
+        for scope in scopes.iter().filter(|s| s.live()) {
+            if let Some(path) = dirs.iter().rev().find(|p| scope.includes(p, true)) {
+                progress(
+                    &scope.control,
+                    "scanning",
+                    path,
+                    dirs.iter().filter(|p| scope.includes(p, true)).count() as u64,
+                    discovered
+                        .iter()
+                        .filter(|p| scope.includes(p, true))
+                        .count() as u64,
+                );
             }
-            progress(control, "indexing", chunk[0].path.parent().unwrap(), 0, 0);
-            write_found(engine, id, version, &generation, chunk, &mut count)?;
         }
-        let discovered = batches.iter().map(|batch| batch.dirs.len() as u64).sum();
-        progress(
-            control,
-            "scanning",
-            dirs.last().unwrap(),
-            dirs.len() as u64,
-            discovered,
-        );
+        queue.extend(discovered);
         for batch in batches {
-            queue.extend(batch.dirs);
             failed.extend(batch.failed);
         }
     }
-    if control.cancel.load(Ordering::SeqCst) {
-        bail!("扫描已取消，保留已发现文件与上次索引。");
-    }
     let _permit = engine.inner.scan_gate.enter();
-    let final_meta = fs::metadata(&root)?;
-    if identity(&root, &final_meta)? != root_identity {
-        bail!("扫描期间根目录身份改变，保留待校验索引。");
+    for (scope, write) in scopes.iter().zip(&writes).filter(|(s, _)| s.live()) {
+        let result = (|| -> Result<()> {
+            if !fs::metadata(&scope.root)
+                .is_ok_and(|m| identity(&scope.root, &m).is_ok_and(|i| i == scope.identity))
+            {
+                bail!("扫描期间根目录身份改变，保留待校验索引。");
+            }
+            let failed: Vec<_> = failed
+                .iter()
+                .filter(|p| scope.includes(p, true) || scope.includes(p, false))
+                .cloned()
+                .collect();
+            progress(&scope.control, "finalizing", &scope.root, 0, 0);
+            finish_scan(
+                engine,
+                &scope.id,
+                Completion {
+                    version: scope.version,
+                    generation: &generation,
+                    failed: &failed,
+                    count: write.count,
+                    dirty: scope.control.dirty.load(Ordering::SeqCst),
+                    watch_failed: scope.watch && scope.control.watch_failed.load(Ordering::SeqCst),
+                    control: Some(&scope.control),
+                },
+            )
+        })();
+        if let Err(error) = result {
+            let c = engine.lock()?;
+            if scope.live() {
+                db::set_state(
+                    &c,
+                    &scope.id,
+                    "available",
+                    "partial",
+                    Some(&error.to_string()),
+                )?;
+            }
+        }
     }
-    progress(control, "finalizing", &root, 0, 0);
-    finish_scan(
-        engine,
-        id,
-        Completion {
-            version,
-            generation: &generation,
-            failed: &failed,
-            count,
-            dirty: control.dirty.load(Ordering::SeqCst),
-            watch_failed: input.watch && control.watch_failed.load(Ordering::SeqCst),
-        },
-    )
+    if std::env::var_os("FILEM_SCAN_PROFILE").is_some() {
+        eprintln!(
+            "FILEM_SCAN_PROFILE {}",
+            serde_json::json!({"scopes": scopes.len(), "directories": stats.directories,
+            "files": stats.files, "elapsed_ms": started.elapsed().as_millis(), "write_ms": writing.as_millis()})
+        );
+    }
+    Ok(stats)
 }
 
 struct Completion<'a> {
@@ -266,6 +489,7 @@ struct Completion<'a> {
     count: usize,
     dirty: bool,
     watch_failed: bool,
+    control: Option<&'a Control>,
 }
 fn finish_scan(engine: &Engine, id: &str, snapshot: Completion<'_>) -> Result<()> {
     let Completion {
@@ -275,9 +499,14 @@ fn finish_scan(engine: &Engine, id: &str, snapshot: Completion<'_>) -> Result<()
         count,
         dirty,
         watch_failed,
+        control,
     } = snapshot;
     let mut c = engine.lock()?;
     let tx = c.transaction()?;
+    if control.is_some_and(|c| c.cancel.load(Ordering::SeqCst) || c.removed.load(Ordering::SeqCst))
+    {
+        return Ok(());
+    }
     let active: i64 = query_cached(
         &tx,
         "SELECT config_version FROM scopes WHERE id=?",
@@ -321,7 +550,7 @@ fn finish_scan(engine: &Engine, id: &str, snapshot: Completion<'_>) -> Result<()
         &tx,
         "UPDATE scopes SET freshness=?,last_scan=?,scanned=?,message=? WHERE id=?",
         params![
-            if dirty {
+            if control.map_or(dirty, |c| c.dirty.load(Ordering::SeqCst)) {
                 "dirty"
             } else if failed.is_empty() {
                 "current"
@@ -339,6 +568,78 @@ fn finish_scan(engine: &Engine, id: &str, snapshot: Completion<'_>) -> Result<()
     Ok(())
 }
 
+struct WriteScope<'a> {
+    id: &'a str,
+    version: i64,
+    generation: &'a str,
+    plan: Option<&'a ReadScope>,
+    count: usize,
+}
+fn write_batch(engine: &Engine, scopes: &mut [WriteScope<'_>], chunk: &[Found]) -> Result<()> {
+    let mut c = engine.lock()?;
+    let tx = c.transaction()?;
+    let mut active = 0u32;
+    for (i, scope) in scopes.iter().enumerate() {
+        if scope.plan.is_some_and(|p| !p.live()) {
+            continue;
+        }
+        let version: Option<i64> = query_cached(
+            &tx,
+            "SELECT config_version FROM scopes WHERE id=?",
+            [scope.id],
+            |r| r.get(0),
+        )
+        .optional()?;
+        if version != Some(scope.version) {
+            if let Some(plan) = scope.plan {
+                plan.valid.store(false, Ordering::SeqCst);
+                if version.is_some() {
+                    db::set_state(
+                        &tx,
+                        scope.id,
+                        "available",
+                        "partial",
+                        Some("文件夹配置已改变，等待新的扫描请求。"),
+                    )?;
+                }
+                continue;
+            }
+            bail!("文件夹配置已改变，正在重新扫描。");
+        }
+        active |= 1 << i;
+    }
+    let files: Vec<_> = chunk.iter().filter(|f| f.scopes & active != 0).collect();
+    let ids = upsert_entries(&tx, &files)?;
+    let mut counts = vec![0; scopes.len()];
+    {
+        let mut membership = tx.prepare_cached("INSERT INTO memberships(scope_id,entry_id,generation) VALUES(?,?,?) ON CONFLICT(scope_id,entry_id) DO UPDATE SET generation=excluded.generation WHERE excluded.generation<>'everything' AND memberships.generation<>excluded.generation")?;
+        for (file, entry) in files.iter().zip(ids) {
+            for (i, scope) in scopes.iter().enumerate() {
+                if file.scopes & active & (1 << i) != 0 {
+                    membership.execute(params![scope.id, entry, scope.generation])?;
+                    counts[i] += 1;
+                }
+            }
+        }
+    }
+    for (i, scope) in scopes.iter().enumerate() {
+        if active & (1 << i) != 0 && scope.generation != "everything" {
+            execute_cached(
+                &tx,
+                "UPDATE scopes SET scanned=? WHERE id=?",
+                params![(scope.count + counts[i]) as i64, scope.id],
+            )?;
+        }
+    }
+    if active != 0 {
+        db::bump(&tx)?;
+    }
+    tx.commit()?;
+    for (scope, count) in scopes.iter_mut().zip(counts) {
+        scope.count += count;
+    }
+    Ok(())
+}
 fn write_found(
     engine: &Engine,
     id: &str,
@@ -347,92 +648,119 @@ fn write_found(
     chunk: &[Found],
     count: &mut usize,
 ) -> Result<()> {
-    let mut c = engine.lock()?;
-    let tx = c.transaction()?;
-    let active: i64 = query_cached(
-        &tx,
-        "SELECT config_version FROM scopes WHERE id=?",
-        [id],
-        |r| r.get(0),
-    )?;
-    if active != version {
-        bail!("文件夹配置已改变，正在重新扫描。");
-    }
-    let mut directory = None;
-    for file in chunk {
-        let parent = file.path.parent().unwrap();
-        let name = file.path.file_name().unwrap();
-        let name_text = name.to_string_lossy();
-        let dir_id = if let Some((cached_path, cached_id)) = directory.filter(|(p, _)| *p == parent)
-        {
-            directory = Some((cached_path, cached_id));
-            cached_id
-        } else {
-            execute_cached(
-                &tx,
-                "INSERT OR IGNORE INTO directories(path,display) VALUES(?,?)",
-                params![encode(parent.as_os_str()), parent.to_string_lossy()],
-            )?;
-            let dir_id: i64 = query_cached(
-                &tx,
-                "SELECT id FROM directories WHERE path=?",
-                [encode(parent.as_os_str())],
-                |r| r.get(0),
-            )?;
-            directory = Some((parent, dir_id));
-            dir_id
-        };
-        let old: Option<(i64, String)> = query_cached(
-            &tx,
-            "SELECT id,identity FROM entries WHERE dir_id=? AND native_name=?",
-            params![dir_id, encode(name)],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .optional()?;
-        let mut inherited = Vec::<(String, String)>::new();
-        if let Some((old_id, old_identity)) = old {
-            if old_identity != file.identity {
-                {
-                    let mut s =
-                        tx.prepare("SELECT scope_id,generation FROM memberships WHERE entry_id=?")?;
-                    inherited = s
+    let mut scopes = [WriteScope {
+        id,
+        version,
+        generation,
+        plan: None,
+        count: *count,
+    }];
+    write_batch(engine, &mut scopes, chunk)?;
+    *count = scopes[0].count;
+    Ok(())
+}
+
+fn upsert_entries(tx: &Connection, chunk: &[&Found]) -> Result<Vec<i64>> {
+    let mut ids = Vec::with_capacity(chunk.len());
+    {
+        // Keep prepared statements checked out for the transaction rather than
+        // repeatedly hashing long SQL strings and returning them to the cache.
+        let mut find_directory = tx.prepare_cached("SELECT id FROM directories WHERE path=?")?;
+        let mut add_directory =
+            tx.prepare_cached("INSERT INTO directories(path,display) VALUES(?,?)")?;
+        let mut find_entry = tx.prepare_cached(
+            "SELECT id,identity,name=?3 AND extension=?4 AND group_name=?5 AND size=?6 AND mtime=?7 AND attributes=?8 FROM entries WHERE dir_id=?1 AND native_name=?2"
+        )?;
+        let mut insert_entry = tx.prepare_cached(
+            "INSERT INTO entries(dir_id,native_name,name,extension,group_name,size,mtime,identity,attributes) VALUES(?,?,?,?,?,?,?,?,?)"
+        )?;
+        let mut update_entry = tx.prepare_cached(
+            "UPDATE entries SET name=?,extension=?,group_name=?,size=?,mtime=?,attributes=? WHERE id=?"
+        )?;
+        let mut directory = None;
+        for file in chunk {
+            let parent = file.path.parent().unwrap();
+            let name = encode(file.path.file_name().unwrap());
+            let name_text = file.path.file_name().unwrap().to_string_lossy();
+            let ext = model::extension(&name_text);
+            let group = model::group(&ext);
+            let size = file.meta.len().min(i64::MAX as u64) as i64;
+            let time = mtime(&file.meta);
+            let attrs = attributes(&file.meta);
+            let dir_id =
+                if let Some((cached_path, cached_id)) = directory.filter(|(p, _)| *p == parent) {
+                    directory = Some((cached_path, cached_id));
+                    cached_id
+                } else {
+                    let native = encode(parent.as_os_str());
+                    let existing: Option<i64> = find_directory
+                        .query_row([&native], |r| r.get(0))
+                        .optional()?;
+                    let dir_id = match existing {
+                        Some(id) => id,
+                        None => {
+                            add_directory.execute(params![native, parent.to_string_lossy()])?;
+                            tx.last_insert_rowid()
+                        }
+                    };
+                    directory = Some((parent, dir_id));
+                    dir_id
+                };
+            let old: Option<(i64, String, bool)> = find_entry
+                .query_row(
+                    params![dir_id, name, name_text, ext, group, size, time, attrs],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .optional()?;
+            let mut inherited = Vec::<(String, String)>::new();
+            let existing = match old {
+                Some((old_id, old_identity, unchanged)) if old_identity == file.identity => {
+                    if !unchanged {
+                        update_entry
+                            .execute(params![name_text, ext, group, size, time, attrs, old_id])?;
+                    }
+                    Some(old_id)
+                }
+                Some((old_id, _, _)) => {
+                    let mut memberships = tx.prepare_cached(
+                        "SELECT scope_id,generation FROM memberships WHERE entry_id=?",
+                    )?;
+                    inherited = memberships
                         .query_map([old_id], |r| Ok((r.get(0)?, r.get(1)?)))?
                         .collect::<rusqlite::Result<_>>()?;
+                    execute_cached(tx, "DELETE FROM entries WHERE id=?", [old_id])?;
+                    None
                 }
-                execute_cached(&tx, "DELETE FROM entries WHERE id=?", [old_id])?;
+                None => None,
+            };
+            let entry_id = match existing {
+                Some(id) => id,
+                None => {
+                    insert_entry.execute(params![
+                        dir_id,
+                        name,
+                        name_text,
+                        ext,
+                        group,
+                        size,
+                        time,
+                        file.identity,
+                        attrs
+                    ])?;
+                    tx.last_insert_rowid()
+                }
+            };
+            for (scope, generation) in inherited {
+                execute_cached(
+                    tx,
+                    "INSERT OR IGNORE INTO memberships(scope_id,entry_id,generation) VALUES(?,?,?)",
+                    params![scope, entry_id, generation],
+                )?;
             }
+            ids.push(entry_id);
         }
-        let ext = model::extension(&name_text);
-        execute_cached(&tx,"INSERT INTO entries(dir_id,native_name,name,extension,group_name,size,mtime,identity,attributes)
-              VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(dir_id,native_name) DO UPDATE SET name=excluded.name,extension=excluded.extension,group_name=excluded.group_name,size=excluded.size,mtime=excluded.mtime,identity=excluded.identity,attributes=excluded.attributes
-              WHERE entries.name!=excluded.name OR entries.extension!=excluded.extension OR entries.group_name!=excluded.group_name OR entries.size!=excluded.size OR entries.mtime!=excluded.mtime OR entries.identity!=excluded.identity OR entries.attributes!=excluded.attributes",
-              params![dir_id,encode(name),name_text,ext,model::group(&ext),file.meta.len().min(i64::MAX as u64) as i64,mtime(&file.meta),file.identity,attributes(&file.meta)])?;
-        let entry_id: i64 = query_cached(
-            &tx,
-            "SELECT id FROM entries WHERE dir_id=? AND native_name=?",
-            params![dir_id, encode(name)],
-            |r| r.get(0),
-        )?;
-        for (scope, generation) in inherited {
-            execute_cached(
-                &tx,
-                "INSERT OR IGNORE INTO memberships(scope_id,entry_id,generation) VALUES(?,?,?)",
-                params![scope, entry_id, generation],
-            )?;
-        }
-        execute_cached(&tx,"INSERT INTO memberships(scope_id,entry_id,generation) VALUES(?,?,?) ON CONFLICT(scope_id,entry_id) DO UPDATE SET generation=CASE WHEN excluded.generation='everything' THEN memberships.generation ELSE excluded.generation END",params![id,entry_id,generation])?;
     }
-    *count += chunk.len();
-    if generation != "everything" {
-        execute_cached(
-            &tx,
-            "UPDATE scopes SET scanned=? WHERE id=?",
-            params![*count as i64, id],
-        )?;
-    }
-    db::bump(&tx)?;
-    tx.commit()?;
-    Ok(())
+    Ok(ids)
 }
 
 /// Reconcile known file paths without restarting traversal of the entire scope.
@@ -587,6 +915,7 @@ pub(crate) fn index_candidates(
                     path: canonical,
                     meta,
                     identity,
+                    scopes: 1,
                 })
             })();
             let Ok(file) = checked else {
@@ -613,6 +942,10 @@ pub(crate) fn index_candidates(
     }
     Ok(ids)
 }
+
+#[cfg(test)]
+#[path = "scan_tests.rs"]
+mod grouped_tests;
 
 #[cfg(test)]
 mod candidate_tests {
@@ -841,6 +1174,7 @@ mod candidate_tests {
             count: 0,
             dirty: false,
             watch_failed: false,
+            control: None,
         };
         let plan = e
             .preview_move(std::slice::from_ref(&id), &display_path(&target))
