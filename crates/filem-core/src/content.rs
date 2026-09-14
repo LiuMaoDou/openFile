@@ -291,7 +291,8 @@ impl Engine {
         Ok(())
     }
     pub fn content_status(&self, scope_id: &str) -> Result<ContentStatus> {
-        let c = self.lock()?;
+        let reader = self.status_reader()?;
+        let c = reader.unchecked_transaction()?;
         let scopes = db::scopes(&c)?;
         let mut result = Vec::new();
         for scope in scopes

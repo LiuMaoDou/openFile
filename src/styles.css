@@ -1328,6 +1328,78 @@ main {
   align-items: center;
   gap: 5px;
 }
+.scan-progress-list {
+  flex-basis: 100%;
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+  border-top: 1px solid var(--success-border);
+  padding-top: 10px;
+}
+.scan-progress-item {
+  min-width: 0;
+}
+.scan-progress-heading,
+.scan-progress-detail,
+.scan-progress-meter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.scan-progress-heading {
+  flex-wrap: wrap;
+}
+.scan-progress-heading > strong {
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scan-progress-time {
+  margin-left: auto;
+}
+.scan-progress-meter {
+  margin: 8px 0 6px;
+}
+.scan-progress-meter progress {
+  flex: 1;
+  min-width: 0;
+  height: 7px;
+  border: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  appearance: none;
+  background: var(--success-border);
+  accent-color: var(--success);
+}
+.scan-progress-meter progress::-webkit-progress-bar {
+  background: var(--success-border);
+}
+.scan-progress-meter progress::-webkit-progress-value {
+  background: var(--success);
+  border-radius: 8px;
+}
+.scan-progress-meter progress::-moz-progress-bar {
+  background: var(--success);
+  border-radius: 8px;
+}
+.scan-progress-meter > strong {
+  width: 34px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.scan-progress-detail {
+  flex-wrap: wrap;
+  color: var(--muted);
+}
+.scan-progress-path {
+  margin-top: 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
 .scope-link .scope-name-status {
   min-width: 0;
   display: flex;

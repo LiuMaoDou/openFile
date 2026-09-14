@@ -6,6 +6,13 @@ export interface ScopeInput {
   excludes: string[];
 }
 export interface Scope extends ScopeInput {
+  progress?: {
+    phase: "scanning" | "indexing" | "finalizing";
+    processedDirectories: number;
+    discoveredDirectories: number;
+    currentPath: string;
+    elapsedMs: number;
+  } | null;
   contentPaused: boolean;
   id: string;
   name: string;

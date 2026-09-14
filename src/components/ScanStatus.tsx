@@ -9,6 +9,13 @@ import type { Scope } from "../types";
 import { formatDate } from "./FileIcon";
 const pending = (scope: Scope) =>
   ["scanning", "verifying", "dirty", "unscanned"].includes(scope.freshness);
+function elapsedLabel(ms: number) {
+  const seconds = Math.floor(ms / 1000);
+  if (seconds < 60) return `${seconds} 秒`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} 分 ${seconds % 60} 秒`;
+  return `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分`;
+}
 export function scanLabel(scope: Scope, paused: boolean) {
   if (scope.availability !== "available")
     return scope.availability === "offline" ? "文件夹离线" : "无法访问";
@@ -66,6 +73,57 @@ export function ScanStatus({
           <Clock3 size={13} />
           {issues.length ? "最近扫描" : "完成于"} {formatDate(last)}
         </span>
+      )}
+      {running.some((scope) => scope.progress) && (
+        <div className="scan-progress-list" aria-live="off">
+          {running.map((scope) => {
+            const progress = scope.progress;
+            if (!progress) return null;
+            const total = Math.max(1, progress.discoveredDirectories);
+            const processed = Math.min(total, progress.processedDirectories);
+            const percent = Math.floor((processed / total) * 100);
+            const phase = paused
+              ? "扫描已暂停"
+              : progress.phase === "finalizing"
+                ? "目录已扫描完，正在整理索引"
+                : progress.phase === "indexing"
+                  ? "正在写入索引"
+                  : "正在扫描目录";
+            return (
+              <div className="scan-progress-item" key={scope.id}>
+                <div className="scan-progress-heading">
+                  <strong title={scope.path}>{scope.name}</strong>
+                  <span>{phase}</span>
+                  <span className="scan-progress-time">
+                    已用时 {elapsedLabel(progress.elapsedMs)}
+                  </span>
+                </div>
+                <div className="scan-progress-meter">
+                  <progress
+                    max={total}
+                    value={processed}
+                    aria-label={`${scope.name} 已发现目录处理进度`}
+                    aria-valuetext={`已处理 ${processed} 个目录，已发现 ${total} 个目录，${percent}%`}
+                  />
+                  <strong>{percent}%</strong>
+                </div>
+                <div className="scan-progress-detail">
+                  <span>
+                    已处理目录 {processed.toLocaleString()} /{" "}
+                    {total.toLocaleString()}
+                  </span>
+                  <span>总目录数随扫描更新</span>
+                </div>
+                <div
+                  className="scan-progress-path"
+                  title={progress.currentPath}
+                >
+                  当前位置：{progress.currentPath}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       )}
     </div>
   );

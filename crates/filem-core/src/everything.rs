@@ -56,7 +56,9 @@ impl Engine {
         }
     }
     pub(crate) fn everything_enabled(&self) -> bool {
-        self.lock()
+        self.inner
+            .query_db
+            .lock()
             .ok()
             .and_then(|c| {
                 c.query_row(
@@ -103,14 +105,12 @@ impl Engine {
     }
     pub(crate) fn query_with_everything(&self, q: &Query) -> Result<QueryResult> {
         if !self.everything_enabled() || q.search.is_empty() {
-            let c = self.lock()?;
-            return db::query(&c, q);
+            return self.query_local(q);
         }
         // Cover filesystem validation as well as IPC. Rapid typing must not
         // launch several concurrent 50,000-path stat passes.
         let Ok(_query) = self.inner.everything_query.try_lock() else {
-            let c = self.lock()?;
-            let mut result = db::query(&c, q)?;
+            let mut result = self.query_local(q)?;
             result.search_notice = Some("Everything 正在处理另一个搜索，已使用本地索引。".into());
             return Ok(result);
         };
@@ -125,8 +125,7 @@ impl Engine {
                 .collect::<Result<Vec<_>>>()?
         };
         if scopes.is_empty() {
-            let c = self.lock()?;
-            return db::query(&c, q);
+            return self.query_local(q);
         }
         let lookup = (|| -> Result<Vec<String>> {
             let (paths, truncated) = paths(
@@ -151,10 +150,9 @@ impl Engine {
                 let mut query = q.clone();
                 query.search.clear();
                 query.candidate_ids = Some(ids);
-                let c = self.lock()?;
-                let mut result = db::query(&c, &query)?;
+                let mut result = self.query_local(&query)?;
                 if result.total == 0 {
-                    let mut local = db::query(&c, q)?;
+                    let mut local = self.query_local(q)?;
                     if local.total > 0 {
                         local.search_notice =
                             Some("Everything 尚未覆盖这些结果，已使用本地索引。".into());
@@ -165,8 +163,7 @@ impl Engine {
                 Ok(result)
             }
             Err(error) => {
-                let c = self.lock()?;
-                let mut result = db::query(&c, q)?;
+                let mut result = self.query_local(q)?;
                 result.search_notice =
                     Some(format!("Everything 不可用，已使用本地索引：{error:#}"));
                 Ok(result)

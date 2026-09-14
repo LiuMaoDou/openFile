@@ -31,6 +31,20 @@ struct Batch {
     dirs: Vec<PathBuf>,
     failed: Vec<PathBuf>,
 }
+struct ProgressGuard<'a>(&'a Control);
+impl Drop for ProgressGuard<'_> {
+    fn drop(&mut self) {
+        *self.0.progress.lock().unwrap() = None;
+    }
+}
+fn progress(control: &Control, phase: &str, path: &Path, processed: u64, discovered: u64) {
+    if let Some((_, progress)) = control.progress.lock().unwrap().as_mut() {
+        progress.phase = phase.into();
+        progress.current_path = display_path(path);
+        progress.processed_directories += processed;
+        progress.discovered_directories += discovered;
+    }
+}
 fn read_dir(
     dir: &Path,
     root: &Path,
@@ -38,7 +52,9 @@ fn read_dir(
     recursive: bool,
     storage: &Path,
     gate: &crate::scan_gate::ScanGate,
+    control: &Control,
 ) -> Batch {
+    progress(control, "scanning", dir, 0, 0);
     let mut batch = Batch {
         files: Vec::new(),
         dirs: Vec::new(),
@@ -141,13 +157,26 @@ pub(crate) fn run(engine: &Engine, id: &str, control: &Arc<Control>) -> Result<(
         )?;
         return Ok(());
     }
+    *control.progress.lock().unwrap() = Some((
+        std::time::Instant::now(),
+        model::ScanProgress {
+            phase: "scanning".into(),
+            processed_directories: 0,
+            discovered_directories: 1,
+            current_path: display_path(&root),
+            elapsed_ms: 0,
+        },
+    ));
+    let _progress = ProgressGuard(control);
     let _ = engine.everything_prefill(id);
     let rules = Excludes::new(&input.excludes)?;
     let generation = uuid::Uuid::new_v4().to_string();
     {
-        let c = engine.lock()?;
-        db::set_state(&c, id, "available", "scanning", None)?;
-        c.execute("UPDATE scopes SET scanned=0 WHERE id=?", [id])?;
+        let mut c = engine.lock()?;
+        let tx = c.transaction()?;
+        db::set_state(&tx, id, "available", "scanning", None)?;
+        tx.execute("UPDATE scopes SET scanned=0 WHERE id=?", [id])?;
+        tx.commit()?;
     }
     let mut queue = VecDeque::from([root.clone()]);
     let mut failed = Vec::new();
@@ -157,10 +186,10 @@ pub(crate) fn run(engine: &Engine, id: &str, control: &Arc<Control>) -> Result<(
         if control.cancel.load(Ordering::SeqCst) || control.removed.load(Ordering::SeqCst) {
             bail!("扫描已取消，保留已发现文件与上次索引。");
         }
-        let dirs: Vec<_> = (0..queue.len().min(16))
+        let dirs: Vec<_> = (0..queue.len().min(64))
             .filter_map(|_| queue.pop_front())
             .collect();
-        let batches = engine.inner.pool.install(|| {
+        let mut batches = engine.inner.pool.install(|| {
             dirs.par_iter()
                 .map(|d| {
                     read_dir(
@@ -170,6 +199,7 @@ pub(crate) fn run(engine: &Engine, id: &str, control: &Arc<Control>) -> Result<(
                         input.recursive,
                         &engine.inner.storage,
                         &engine.inner.scan_gate,
+                        control,
                     )
                 })
                 .collect::<Vec<_>>()
@@ -179,17 +209,28 @@ pub(crate) fn run(engine: &Engine, id: &str, control: &Arc<Control>) -> Result<(
             continue;
         }
         let count_before_batch = count;
-        for batch in &batches {
-            for chunk in batch.files.chunks(256) {
-                if engine.inner.scan_gate.is_paused() {
-                    // Re-read after deletion; never retain pre-delete metadata across the pause.
-                    count = count_before_batch;
-                    queue.extend(dirs.iter().cloned());
-                    continue 'scan;
-                }
-                write_found(engine, id, version, &generation, chunk, &mut count)?;
-            }
+        let mut files = Vec::new();
+        for batch in &mut batches {
+            files.append(&mut batch.files);
         }
+        for chunk in files.chunks(512) {
+            if engine.inner.scan_gate.is_paused() {
+                // Re-read after deletion; never retain pre-delete metadata across the pause.
+                count = count_before_batch;
+                queue.extend(dirs.iter().cloned());
+                continue 'scan;
+            }
+            progress(control, "indexing", chunk[0].path.parent().unwrap(), 0, 0);
+            write_found(engine, id, version, &generation, chunk, &mut count)?;
+        }
+        let discovered = batches.iter().map(|batch| batch.dirs.len() as u64).sum();
+        progress(
+            control,
+            "scanning",
+            dirs.last().unwrap(),
+            dirs.len() as u64,
+            discovered,
+        );
         for batch in batches {
             queue.extend(batch.dirs);
             failed.extend(batch.failed);
@@ -203,6 +244,7 @@ pub(crate) fn run(engine: &Engine, id: &str, control: &Arc<Control>) -> Result<(
     if identity(&root, &final_meta)? != root_identity {
         bail!("扫描期间根目录身份改变，保留待校验索引。");
     }
+    progress(control, "finalizing", &root, 0, 0);
     finish_scan(
         engine,
         id,
@@ -316,21 +358,30 @@ fn write_found(
     if active != version {
         bail!("文件夹配置已改变，正在重新扫描。");
     }
+    let mut directory = None;
     for file in chunk {
         let parent = file.path.parent().unwrap();
         let name = file.path.file_name().unwrap();
         let name_text = name.to_string_lossy();
-        execute_cached(
-            &tx,
-            "INSERT OR IGNORE INTO directories(path,display) VALUES(?,?)",
-            params![encode(parent.as_os_str()), parent.to_string_lossy()],
-        )?;
-        let dir_id: i64 = query_cached(
-            &tx,
-            "SELECT id FROM directories WHERE path=?",
-            [encode(parent.as_os_str())],
-            |r| r.get(0),
-        )?;
+        let dir_id = if let Some((cached_path, cached_id)) = directory.filter(|(p, _)| *p == parent)
+        {
+            directory = Some((cached_path, cached_id));
+            cached_id
+        } else {
+            execute_cached(
+                &tx,
+                "INSERT OR IGNORE INTO directories(path,display) VALUES(?,?)",
+                params![encode(parent.as_os_str()), parent.to_string_lossy()],
+            )?;
+            let dir_id: i64 = query_cached(
+                &tx,
+                "SELECT id FROM directories WHERE path=?",
+                [encode(parent.as_os_str())],
+                |r| r.get(0),
+            )?;
+            directory = Some((parent, dir_id));
+            dir_id
+        };
         let old: Option<(i64, String)> = query_cached(
             &tx,
             "SELECT id,identity FROM entries WHERE dir_id=? AND native_name=?",
@@ -353,7 +404,8 @@ fn write_found(
         }
         let ext = model::extension(&name_text);
         execute_cached(&tx,"INSERT INTO entries(dir_id,native_name,name,extension,group_name,size,mtime,identity,attributes)
-              VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(dir_id,native_name) DO UPDATE SET name=excluded.name,extension=excluded.extension,group_name=excluded.group_name,size=excluded.size,mtime=excluded.mtime,identity=excluded.identity,attributes=excluded.attributes",
+              VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(dir_id,native_name) DO UPDATE SET name=excluded.name,extension=excluded.extension,group_name=excluded.group_name,size=excluded.size,mtime=excluded.mtime,identity=excluded.identity,attributes=excluded.attributes
+              WHERE entries.name!=excluded.name OR entries.extension!=excluded.extension OR entries.group_name!=excluded.group_name OR entries.size!=excluded.size OR entries.mtime!=excluded.mtime OR entries.identity!=excluded.identity OR entries.attributes!=excluded.attributes",
               params![dir_id,encode(name),name_text,ext,model::group(&ext),file.meta.len().min(i64::MAX as u64) as i64,mtime(&file.meta),file.identity,attributes(&file.meta)])?;
         let entry_id: i64 = query_cached(
             &tx,
@@ -381,6 +433,108 @@ fn write_found(
     db::bump(&tx)?;
     tx.commit()?;
     Ok(())
+}
+
+/// Reconcile known file paths without restarting traversal of the entire scope.
+/// Ambiguous events (including a removed directory) fall back to a complete scan.
+pub(crate) fn update_files(
+    engine: &Engine,
+    id: &str,
+    control: &Control,
+    paths: &[PathBuf],
+) -> Result<bool> {
+    let (root, expected, version, input) = {
+        let c = engine.lock()?;
+        let usable: bool = c.query_row(
+            "SELECT availability='available' AND last_scan IS NOT NULL AND freshness IN ('current','dirty','partial') FROM scopes WHERE id=?",
+            [id], |r| r.get(0),
+        )?;
+        if !usable {
+            return Ok(false);
+        }
+        db::root(&c, id)?
+    };
+    if !fs::metadata(&root).is_ok_and(|m| identity(&root, &m).is_ok_and(|v| v == expected)) {
+        return Ok(false);
+    }
+    let rules = Excludes::new(&input.excludes)?;
+    let mut present = Vec::new();
+    let mut missing = Vec::new();
+    for path in paths {
+        let Ok(relative) = path.strip_prefix(&root) else {
+            return Ok(false);
+        };
+        if path.starts_with(&engine.inner.storage)
+            || rules.matches(relative)
+            || (!input.recursive && relative.components().count() != 1)
+        {
+            continue;
+        }
+        match fs::symlink_metadata(path) {
+            Ok(meta)
+                if meta.is_file()
+                    && !meta.file_type().is_symlink()
+                    && !reparse(attributes(&meta))
+                    && !placeholder(attributes(&meta)) =>
+            {
+                present.push(path.clone())
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                // Native byte prefixes preserve path boundaries on Unix and Windows.
+                let mut prefix = path.as_os_str().to_os_string();
+                prefix.push(std::path::MAIN_SEPARATOR_STR);
+                let lower = encode(&prefix);
+                let mut upper = lower.clone();
+                *upper.last_mut().unwrap() += 1;
+                let c = engine.lock()?;
+                let directory: bool = c.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM directories WHERE path=? OR (path>=? AND path<?))",
+                    params![encode(path.as_os_str()), lower, upper],
+                    |r| r.get(0),
+                )?;
+                if directory || path == &root {
+                    return Ok(false);
+                }
+                missing.push(path);
+            }
+            _ => return Ok(false),
+        }
+    }
+    if control.cancel.load(Ordering::SeqCst) || control.removed.load(Ordering::SeqCst) {
+        bail!("扫描已取消，保留已发现文件与上次索引。");
+    }
+    index_candidates(engine, id, &present)?;
+    let _permit = engine.inner.scan_gate.enter();
+    let mut c = engine.lock()?;
+    let tx = c.transaction()?;
+    if db::root(&tx, id)?.2 != version || control.cancel.load(Ordering::SeqCst) {
+        bail!("文件夹配置已改变或扫描已取消。");
+    }
+    for path in missing {
+        if !fs::symlink_metadata(path).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound) {
+            return Ok(false);
+        }
+        let row: Option<(i64, i64)> = tx.query_row(
+            "SELECT e.id,e.dir_id FROM entries e JOIN directories d ON d.id=e.dir_id WHERE d.path=? AND e.native_name=?",
+            params![encode(path.parent().unwrap().as_os_str()),encode(path.file_name().unwrap())],
+            |r| Ok((r.get(0)?,r.get(1)?)),
+        ).optional()?;
+        if let Some((entry, dir)) = row {
+            tx.execute(
+                "DELETE FROM memberships WHERE scope_id=? AND entry_id=?",
+                params![id, entry],
+            )?;
+            tx.execute("DELETE FROM entries WHERE id=? AND NOT EXISTS(SELECT 1 FROM memberships WHERE entry_id=?)", params![entry,entry])?;
+            tx.execute("DELETE FROM directories WHERE id=? AND NOT EXISTS(SELECT 1 FROM entries WHERE dir_id=?)", params![dir,dir])?;
+        }
+    }
+    tx.execute(
+        "UPDATE scopes SET freshness=CASE WHEN ? THEN 'dirty' WHEN message IS NOT NULL THEN 'partial' ELSE 'current' END WHERE id=?",
+        params![control.dirty.load(Ordering::SeqCst), id],
+    )?;
+    db::bump(&tx)?;
+    tx.commit()?;
+    Ok(true)
 }
 
 /// Everything only supplies candidates. Authorize and stat each one before indexing it.
@@ -464,6 +618,140 @@ pub(crate) fn index_candidates(
 mod candidate_tests {
     use super::*;
     use crate::model::{Query, ScopeInput};
+    #[test]
+    fn file_events_update_only_affected_paths_and_preserve_partial_scan_warnings() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        fs::create_dir_all(root.join("nested/deep")).unwrap();
+        fs::write(root.join("stable.txt"), "keep").unwrap();
+        fs::write(root.join("change.txt"), "old").unwrap();
+        fs::write(root.join("nested/deep/gone.txt"), "gone").unwrap();
+        let e = Engine::open(temp.path().join("state/index.sqlite")).unwrap();
+        let id = e
+            .add_scope(ScopeInput {
+                path: display_path(&root),
+                recursive: true,
+                watch: false,
+                excludes: vec!["*.tmp".into()],
+                content_enabled: false,
+            })
+            .unwrap();
+        let start = std::time::Instant::now();
+        while e.summary().unwrap().scopes[0].freshness != "current" {
+            assert!(start.elapsed() < std::time::Duration::from_secs(5));
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let root = root.canonicalize().unwrap();
+        let control = e.inner.controls.lock().unwrap()[&id].clone();
+        let stable = e
+            .query(&Query {
+                search: "stable.txt".into(),
+                ..Default::default()
+            })
+            .unwrap()
+            .entries[0]
+            .id
+            .clone();
+        e.set_hidden(std::slice::from_ref(&stable), true).unwrap();
+        let generation: String = e
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT generation FROM memberships WHERE entry_id=?",
+                [&stable],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let last_scan = e.summary().unwrap().scopes[0].last_scan;
+        fs::write(root.join("change.txt"), "a longer changed file").unwrap();
+        fs::write(root.join("new.txt"), "new").unwrap();
+        fs::write(root.join("excluded.tmp"), "excluded").unwrap();
+        fs::remove_file(root.join("nested/deep/gone.txt")).unwrap();
+        assert!(update_files(
+            &e,
+            &id,
+            &control,
+            &[
+                root.join("change.txt"),
+                root.join("new.txt"),
+                root.join("excluded.tmp"),
+                root.join("nested/deep/gone.txt"),
+            ]
+        )
+        .unwrap());
+        let results = e.query(&Query::default()).unwrap();
+        assert_eq!(results.total, 2);
+        assert_eq!(
+            results
+                .entries
+                .iter()
+                .find(|v| v.name == "change.txt")
+                .unwrap()
+                .size,
+            21
+        );
+        assert_eq!(e.summary().unwrap().scopes[0].last_scan, last_scan);
+        let after: String = e
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT generation FROM memberships WHERE entry_id=?",
+                [&stable],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(generation, after);
+        assert_eq!(
+            e.query(&Query {
+                hidden: true,
+                ..Default::default()
+            })
+            .unwrap()
+            .entries[0]
+                .id,
+            stable
+        );
+
+        e.lock()
+            .unwrap()
+            .execute(
+                "UPDATE scopes SET freshness='dirty',message='部分路径不可访问' WHERE id=?",
+                [&id],
+            )
+            .unwrap();
+        assert!(update_files(&e, &id, &control, &[root.join("new.txt")]).unwrap());
+        let scope = e.summary().unwrap().scopes.remove(0);
+        assert_eq!(scope.freshness, "partial");
+        assert_eq!(scope.message.as_deref(), Some("部分路径不可访问"));
+    }
+    #[test]
+    fn directory_removal_requires_full_reconciliation_even_without_direct_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        fs::create_dir_all(root.join("old/deep")).unwrap();
+        fs::write(root.join("old/deep/file.txt"), "keep").unwrap();
+        let e = Engine::open(temp.path().join("state/index.sqlite")).unwrap();
+        let id = e
+            .add_scope(ScopeInput {
+                path: display_path(&root),
+                recursive: true,
+                watch: false,
+                excludes: vec![],
+                content_enabled: false,
+            })
+            .unwrap();
+        let start = std::time::Instant::now();
+        while e.summary().unwrap().scopes[0].freshness != "current" {
+            assert!(start.elapsed() < std::time::Duration::from_secs(5));
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let root = root.canonicalize().unwrap();
+        let control = e.inner.controls.lock().unwrap()[&id].clone();
+        fs::rename(root.join("old"), root.join("new")).unwrap();
+        assert!(!update_files(&e, &id, &control, &[root.join("old")]).unwrap());
+        assert!(!update_files(&e, &id, &control, &[root.join("new")]).unwrap());
+        assert_eq!(e.query(&Query::default()).unwrap().total, 1);
+    }
     #[test]
     fn candidates_respect_scope_excludes_identity_and_do_not_churn_revision() {
         let temp = tempfile::tempdir().unwrap();

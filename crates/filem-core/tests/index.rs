@@ -380,6 +380,7 @@ fn native_watch_reconciles_created_files() {
     config.watch = true;
     let id = e.add_scope(config).unwrap();
     wait(&e, &id);
+    let last_scan = e.summary().unwrap().scopes[0].last_scan;
     write(&root.join("new.md"), "second");
     let start = Instant::now();
     loop {
@@ -392,6 +393,12 @@ fn native_watch_reconciles_created_files() {
         );
         thread::sleep(Duration::from_millis(50));
     }
+    wait(&e, &id);
+    assert_eq!(
+        e.summary().unwrap().scopes[0].last_scan,
+        last_scan,
+        "a file event must not restart the full scan"
+    );
 }
 #[cfg(unix)]
 #[test]

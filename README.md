@@ -2,21 +2,21 @@
 
 按用户指定的盘或文件夹聚合相同扩展名文件。索引、筛选和隐藏只改变本地视图，源文件保持原位。
 
-当前版本：**0.1.6 开发验证版**。Rust + SQLite 核心、React 界面与 Tauri 2 桌面壳已实现；Windows 实机验证仍待执行，不能视为 M0/M1 全量验收通过。
+当前版本：**0.1.7 开发验证版**。Rust + SQLite 核心、React 界面与 Tauri 2 桌面壳已实现；Windows 实机验证仍待执行，不能视为 M0/M1 全量验收通过。
 
 ## Intel Mac 直接运行
 
-**[下载 macOS Intel DMG](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.6/FileM_0.1.6_macos-intel.dmg)** · **[下载 macOS Intel ZIP](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.6/FileM-0.1.6-macos-intel.zip)** · [Mac 校验值](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.6/SHA256SUMS.txt)
+**[下载 macOS Intel DMG](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.7/FileM_0.1.7_macos-intel.dmg)** · **[下载 macOS Intel ZIP](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.7/FileM-0.1.7-macos-intel.zip)** · [Mac 校验值](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.7/SHA256SUMS.txt)
 
 适用于 Intel（x86_64）Mac。打开 DMG，将 `FileM.app` 拖入 Applications（应用程序）；也可解压 ZIP 后移入“应用程序”。无需安装 Node.js、Rust、AnyTXT 或 Office。Mac 使用内置本地索引，Everything 加速仅适用于 Windows。
 
-此包未使用 Apple Developer ID 签名，也未经过公证。首次打开若因无法验证开发者而被阻止，在确认下载来源后，可按 [Apple 官方说明](https://support.apple.com/zh-cn/102445)，到“系统设置 → 隐私与安全性 → 仍要打开”。构建与验证范围见 [0.1.6 主题更新说明](https://github.com/LiuMaoDou/openFile/releases/tag/v0.1.6)。
+此包未使用 Apple Developer ID 签名，也未经过公证。首次打开若因无法验证开发者而被阻止，在确认下载来源后，可按 [Apple 官方说明](https://support.apple.com/zh-cn/102445)，到“系统设置 → 隐私与安全性 → 仍要打开”。构建与验证范围见 [0.1.7 扫描与检索更新说明](https://github.com/LiuMaoDou/openFile/releases/tag/v0.1.7)。
 
 ## Windows 直接运行
 
-**[下载 Windows 安装版](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.6/FileM_0.1.6_x64-setup.exe)** · **[下载免安装 ZIP](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.6/FileM-0.1.6-windows-x64-portable.zip)** · [版本说明与校验值](https://github.com/LiuMaoDou/openFile/releases/tag/v0.1.6)
+**[下载 Windows 安装版](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.7/FileM_0.1.7_x64-setup.exe)** · **[下载免安装 ZIP](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.7/FileM-0.1.7-windows-x64-portable.zip)** · [版本说明与校验值](https://github.com/LiuMaoDou/openFile/releases/tag/v0.1.7)
 
-Windows 11 x64 用户可运行 `FileM_0.1.6_x64-setup.exe`，或完整解压 `FileM-0.1.6-windows-x64-portable.zip` 后双击 `FileM.exe`。使用者无需安装 Node.js、Rust 或 Visual Studio。免安装包使用系统 WebView2；安装版会在缺少该运行时时联网安装。使用步骤和版本边界见 [Windows 使用说明](docs/Windows_使用说明.md) 与 [0.1.4 内容搜索更新说明](docs/Windows_0.1.4_更新说明.md)；此前修复见 [0.1.3 修复与验证记录](docs/Windows_0.1.3_修复记录.md) 和 [代码复查](docs/Windows_0.1.3_代码复查.md)。分发包通过 GitHub Releases 下载，构建产物不纳入源码版本控制。Release 页面中的 Source code 是源码压缩包，不能直接双击运行；Packages 栏目不用于此应用的安装包分发。
+Windows 11 x64 用户可运行 `FileM_0.1.7_x64-setup.exe`，或完整解压 `FileM-0.1.7-windows-x64-portable.zip` 后双击 `FileM.exe`。使用者无需安装 Node.js、Rust 或 Visual Studio。免安装包使用系统 WebView2；安装版会在缺少该运行时时联网安装。使用步骤和版本边界见 [Windows 使用说明](docs/Windows_使用说明.md) 与 [0.1.4 内容搜索更新说明](docs/Windows_0.1.4_更新说明.md)；此前修复见 [0.1.3 修复与验证记录](docs/Windows_0.1.3_修复记录.md) 和 [代码复查](docs/Windows_0.1.3_代码复查.md)。分发包通过 GitHub Releases 下载，构建产物不纳入源码版本控制。Release 页面中的 Source code 是源码压缩包，不能直接双击运行；Packages 栏目不用于此应用的安装包分发。
 
 ## 外观主题
 
@@ -70,6 +70,14 @@ npm run windows:build
 ## 扫描状态与类型统计
 
 列表上方持续显示扫描状态、完成时间或需要处理的问题；左侧每个监控文件夹显示状态和文件数。选中不同监控文件夹，类型和后缀列表只统计这个文件夹，隐藏零数量分类，并清除旧的类型筛选。
+
+扫描时显示进度条、已处理/已发现目录数、当前位置和耗时。百分比只表示**已发现目录的处理比例**，总目录数会随遍历更新，不代表预先知道整个磁盘的文件总数。目录处理完成后单独显示“正在整理索引”，提交完成后才显示“扫描完成”。进度独立于搜索结果更新，不因刷新计时而重复检索。
+
+扫描按批次合并多个目录的写入，未变化的文件不重复更新元数据索引。搜索与状态统计通过独立只读连接读取已提交的索引，扫描写入期间仍可检索；未变化的统计结果按索引版本复用。
+
+普通文件新增、修改、删除与改名合并为按路径更新，不再每次重扫整个监控文件夹。目录变化、监听溢出或需要重新核对的事件仍触发全量扫描；权限失败的旧索引与说明会保留。启动和手动刷新仍会完整核对，不能只根据父目录修改时间跳过深层文件。
+
+如果扫描范围很大，优先添加实际使用的资料目录；整盘根目录会包含系统、应用和缓存中的大量文件。排除规则可按需要添加 `target`、`.venv`、缓存目录等，现有范围不会自动缩小。内容索引建议只对需要检索正文的资料文件夹开启。Windows 还可使用下述 **Everything 加速**；macOS 使用本地索引。
 
 ## Everything SDK（Windows 可选）
 

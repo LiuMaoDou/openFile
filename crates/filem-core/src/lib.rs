@@ -12,6 +12,7 @@ mod platform;
 mod rules;
 mod scan;
 mod scan_gate;
+mod watch;
 #[cfg(windows)]
 mod windows_shell;
 
@@ -40,6 +41,9 @@ pub struct Engine {
 }
 struct Inner {
     db: Mutex<Connection>,
+    query_db: Mutex<Connection>,
+    status_db: Mutex<Connection>,
+    summary_cache: Mutex<Option<Summary>>,
     // Keep the OS lock until SQLite and every background worker have closed.
     _index_lock: fs::File,
     storage: PathBuf,
@@ -56,6 +60,8 @@ pub(crate) struct Control {
     removed: AtomicBool,
     dirty: AtomicBool,
     watch_failed: AtomicBool,
+    pending: Mutex<watch::Pending>,
+    progress: Mutex<Option<(std::time::Instant, ScanProgress)>>,
 }
 impl Engine {
     pub fn dispatch(&self, command: &str, args: serde_json::Value) -> Result<serde_json::Value> {
@@ -91,15 +97,12 @@ impl Engine {
                 )?,
             )?),
             "summary" => {
-                let c = self.lock()?;
-                let mut summary = db::summary_for(
-                    &c,
+                let summary = self.summary_for(
                     args.get("scopeId").and_then(|v| v.as_str()).unwrap_or(""),
                     args.get("hidden")
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false),
                 )?;
-                summary.scan_paused = self.inner.scan_gate.is_paused();
                 Ok(to_value(summary)?)
             }
             "query" => Ok(to_value(self.query(&serde_json::from_value(args)?)?)?),
@@ -256,6 +259,9 @@ impl Engine {
         let engine = Self {
             inner: Arc::new(Inner {
                 db: Mutex::new(db::connect(path)?),
+                query_db: Mutex::new(db::connect_reader(path)?),
+                status_db: Mutex::new(db::connect_reader(path)?),
+                summary_cache: Mutex::new(None),
                 _index_lock: index_lock,
                 storage,
                 controls: Mutex::new(HashMap::new()),
@@ -281,12 +287,60 @@ impl Engine {
             .map_err(|_| anyhow!("索引状态不可用，请重新启动应用。"))
     }
     pub fn summary(&self) -> Result<Summary> {
-        {
-            let c = self.lock()?;
-            let mut summary = db::summary(&c)?;
-            summary.scan_paused = self.inner.scan_gate.is_paused();
-            Ok(summary)
+        self.summary_for("", false)
+    }
+    fn status_reader(&self) -> Result<MutexGuard<'_, Connection>> {
+        self.inner
+            .status_db
+            .lock()
+            .map_err(|_| anyhow!("索引状态不可用，请重新启动应用。"))
+    }
+    fn summary_for(&self, scope_id: &str, hidden: bool) -> Result<Summary> {
+        let c = self.status_reader()?;
+        let tx = c.unchecked_transaction()?;
+        let revision = db::revision(&tx)?;
+        let mut cache = self.inner.summary_cache.lock().unwrap();
+        let mut summary = match cache.as_ref() {
+            Some(previous)
+                if previous.revision == revision
+                    && previous.facet_scope_id == scope_id
+                    && previous.facet_hidden == hidden =>
+            {
+                previous.clone()
+            }
+            _ => {
+                let next = db::summary_for(&tx, scope_id, hidden)?;
+                *cache = Some(next.clone());
+                next
+            }
+        };
+        summary.scan_paused = self.inner.scan_gate.is_paused();
+        let controls = self.inner.controls.lock().unwrap();
+        for scope in &mut summary.scopes {
+            scope.progress = controls.get(&scope.id).and_then(|control| {
+                control
+                    .progress
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .map(|(started, progress)| {
+                        let mut progress = progress.clone();
+                        progress.elapsed_ms = started.elapsed().as_millis() as u64;
+                        progress
+                    })
+            });
         }
+        Ok(summary)
+    }
+    fn query_local(&self, q: &Query) -> Result<QueryResult> {
+        let c = self
+            .inner
+            .query_db
+            .lock()
+            .map_err(|_| anyhow!("索引状态不可用，请重新启动应用。"))?;
+        // Count, page and revision must describe the same committed WAL snapshot.
+        let tx = c.unchecked_transaction()?;
+        db::query(&tx, q)
     }
     pub fn query(&self, q: &Query) -> Result<QueryResult> {
         if q.search.chars().count() > 512 || q.search.contains('\0') {
@@ -296,8 +350,7 @@ impl Engine {
             bail!("未知搜索模式");
         }
         if q.search_mode == "content" || q.search_mode == "all" {
-            let c = self.lock()?;
-            db::query(&c, q)
+            self.query_local(q)
         } else {
             self.query_with_everything(q)
         }
@@ -377,7 +430,11 @@ impl Engine {
             .clone();
         self.configure_watch(id)?;
         control.cancel.store(false, Ordering::SeqCst);
-        control.dirty.store(true, Ordering::SeqCst);
+        {
+            let mut pending = control.pending.lock().unwrap();
+            pending.rescan();
+            control.dirty.store(true, Ordering::SeqCst);
+        }
         {
             let c = self.lock()?;
             c.execute("UPDATE scopes SET freshness='verifying' WHERE id=?", [id])?;
@@ -407,6 +464,8 @@ impl Engine {
             removed: AtomicBool::new(false),
             dirty: AtomicBool::new(false),
             watch_failed: AtomicBool::new(false),
+            pending: Mutex::new(watch::Pending::default()),
+            progress: Mutex::new(None),
         });
         self.inner
             .controls
@@ -434,8 +493,31 @@ impl Engine {
                     break;
                 };
                 let engine = Engine { inner };
-                control.dirty.store(false, Ordering::SeqCst);
-                if let Err(error) = scan::run(&engine, &id, &control) {
+                let work = {
+                    let mut pending = control.pending.lock().unwrap();
+                    control.dirty.store(false, Ordering::SeqCst);
+                    std::mem::take(&mut *pending)
+                };
+                let result = if work.full {
+                    scan::run(&engine, &id, &control)
+                } else if work.paths.is_empty() {
+                    Ok(())
+                } else {
+                    scan::update_files(
+                        &engine,
+                        &id,
+                        &control,
+                        &work.paths.into_iter().collect::<Vec<_>>(),
+                    )
+                    .and_then(|handled| {
+                        if handled {
+                            Ok(())
+                        } else {
+                            scan::run(&engine, &id, &control)
+                        }
+                    })
+                };
+                if let Err(error) = result {
                     if let Ok(c) = engine.lock() {
                         let _ = db::set_state(
                             &c,
@@ -473,21 +555,26 @@ impl Engine {
         let rules = rules::Excludes::new(&input.excludes)?;
         let callback_root = root.clone();
         let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-            let useful = match event {
-                Ok(e) => {
-                    !e.kind.is_access()
-                        && (e.paths.is_empty()
-                            || e.paths.iter().any(|p| {
-                                !p.starts_with(&storage)
-                                    && !rules.matches(p.strip_prefix(&callback_root).unwrap_or(p))
-                            }))
-                }
-                Err(_) => true,
-            };
-            if useful
-                && !callback_control.cancel.load(Ordering::SeqCst)
-                && !callback_control.removed.load(Ordering::SeqCst)
+            if callback_control.cancel.load(Ordering::SeqCst)
+                || callback_control.removed.load(Ordering::SeqCst)
             {
+                return;
+            }
+            let mut pending = callback_control.pending.lock().unwrap();
+            match event {
+                Ok(e) if e.need_rescan() || e.paths.is_empty() && !e.kind.is_access() => {
+                    pending.rescan()
+                }
+                Ok(e) if !e.kind.is_access() => {
+                    pending.add(e.paths.into_iter().filter(|p| {
+                        !p.starts_with(&storage)
+                            && !rules.matches(p.strip_prefix(&callback_root).unwrap_or(p))
+                    }));
+                }
+                Err(_) => pending.rescan(),
+                _ => return,
+            }
+            if pending.full || !pending.paths.is_empty() {
                 callback_control.dirty.store(true, Ordering::SeqCst);
                 let _ = callback_control.sender.try_send(());
             }
@@ -652,6 +739,30 @@ impl Engine {
 #[cfg(test)]
 mod ownership_tests {
     use super::*;
+    #[test]
+    fn searches_and_status_read_committed_data_while_a_writer_is_busy() {
+        let temp = tempfile::tempdir().unwrap();
+        let engine = Engine::open(temp.path().join("index.sqlite")).unwrap();
+        let c = engine.lock().unwrap();
+        let tx = c.unchecked_transaction().unwrap();
+        tx.execute("UPDATE meta SET revision=100 WHERE id=1", [])
+            .unwrap();
+        let reader = engine.clone();
+        let (send, receive) = std::sync::mpsc::channel();
+        let worker = thread::spawn(move || {
+            let result = reader.query(&Query::default()).unwrap();
+            let summary = reader.summary().unwrap();
+            let content = reader.content_status("").unwrap();
+            send.send((result.revision, summary.revision, content.scopes.len()))
+                .unwrap();
+        });
+        let result = receive.recv_timeout(Duration::from_secs(2));
+        // Release the writer even on failure, so a regression cannot hang the suite.
+        drop(tx);
+        drop(c);
+        worker.join().unwrap();
+        assert_eq!(result.unwrap(), (0, 0, 0));
+    }
     #[test]
     fn second_engine_cannot_reset_an_active_operation_and_lock_releases_on_close() {
         let temp = tempfile::tempdir().unwrap();

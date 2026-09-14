@@ -1,7 +1,13 @@
 use crate::{model::*, platform::*};
 use anyhow::{bail, Result};
-use rusqlite::{params, params_from_iter, types::Value, Connection, OptionalExtension};
+use rusqlite::{params, params_from_iter, types::Value, Connection, OpenFlags, OptionalExtension};
 use std::path::{Path, PathBuf};
+
+pub fn connect_reader(path: &Path) -> Result<Connection> {
+    let c = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    c.busy_timeout(std::time::Duration::from_secs(5))?;
+    Ok(c)
+}
 
 pub fn connect(path: &Path) -> Result<Connection> {
     let c = Connection::open(path)?;
@@ -58,6 +64,7 @@ pub fn scopes(c: &Connection) -> Result<Vec<Scope>> {
     let result = s
         .query_map([], |r| {
             Ok(Scope {
+                progress: None,
                 content_enabled: r.get(12)?,
                 content_paused: r.get(13)?,
                 id: r.get(0)?,
@@ -113,9 +120,6 @@ pub fn cleanup(c: &Connection) -> Result<()> {
     c.execute("DELETE FROM entries WHERE NOT EXISTS (SELECT 1 FROM memberships m WHERE m.entry_id=entries.id)",[])?;
     c.execute("DELETE FROM directories WHERE NOT EXISTS (SELECT 1 FROM entries e WHERE e.dir_id=directories.id)",[])?;
     Ok(())
-}
-pub fn summary(c: &Connection) -> Result<Summary> {
-    summary_for(c, "", false)
 }
 pub fn summary_for(c: &Connection, scope_id: &str, hidden: bool) -> Result<Summary> {
     fn buckets(c: &Connection, col: &str, hidden: bool, scope_id: &str) -> Result<Vec<Bucket>> {
@@ -208,8 +212,14 @@ pub fn query(c: &Connection, q: &Query) -> Result<QueryResult> {
         "FROM entries e JOIN directories d ON d.id=e.dir_id WHERE {}",
         conditions.join(" AND ")
     );
+    // Directory paths are only needed for name/path searches, not plain filtering.
+    let count_from = if q.search.is_empty() || q.search_mode == "content" {
+        format!("FROM entries e WHERE {}", conditions.join(" AND "))
+    } else {
+        from.clone()
+    };
     let total = c.query_row(
-        &format!("SELECT COUNT(*) {from}"),
+        &format!("SELECT COUNT(*) {count_from}"),
         params_from_iter(values.iter()),
         |r| r.get(0),
     )?;
@@ -235,11 +245,9 @@ pub fn query(c: &Connection, q: &Query) -> Result<QueryResult> {
         let directory = PathBuf::from(decode(&r.get::<_, Vec<u8>>(2)?));
         let native_name = decode(&r.get::<_, Vec<u8>>(3)?);
         let scope_id: String = r.get(10)?;
-        let (root_bytes, scope_name): (Vec<u8>, String) = c.query_row(
-            "SELECT root,name FROM scopes WHERE id=?",
-            [&scope_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )?;
+        let (root_bytes, scope_name): (Vec<u8>, String) = c
+            .prepare_cached("SELECT root,name FROM scopes WHERE id=?")?
+            .query_row([&scope_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
         let scope_root = PathBuf::from(decode(&root_bytes));
         let scope_name = display_path_text(&scope_name);
         let relative = directory.strip_prefix(&scope_root).unwrap_or(&directory);

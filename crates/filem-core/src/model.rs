@@ -32,6 +32,7 @@ fn default_excludes() -> Vec<String> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Scope {
+    pub progress: Option<ScanProgress>,
     pub content_enabled: bool,
     pub content_paused: bool,
     pub id: String,
@@ -46,6 +47,16 @@ pub struct Scope {
     pub scanned: u64,
     pub last_scan: Option<i64>,
     pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanProgress {
+    pub phase: String,
+    pub processed_directories: u64,
+    pub discovered_directories: u64,
+    pub current_path: String,
+    pub elapsed_ms: u64,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -96,13 +107,13 @@ pub struct QueryResult {
     pub revision: u64,
     pub offset: usize,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Bucket {
     pub name: String,
     pub count: u64,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Summary {
     pub facet_scope_id: String,

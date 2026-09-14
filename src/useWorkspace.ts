@@ -36,7 +36,13 @@ export function useWorkspace(query: Query) {
             previous.facetScopeId === next.facetScopeId &&
             previous.facetHidden === next.facetHidden &&
             previous.revision === next.revision &&
-            previous.scanPaused === next.scanPaused
+            previous.scanPaused === next.scanPaused &&
+            previous.scopes.length === next.scopes.length &&
+            previous.scopes.every(
+              (scope, index) =>
+                scope.progress?.elapsedMs ===
+                next.scopes[index]?.progress?.elapsedMs,
+            )
               ? previous
               : next,
           );
