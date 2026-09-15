@@ -649,7 +649,7 @@ fn run_group_limited(
                     watch_failed: scope.watch && scope.control.watch_failed.load(Ordering::SeqCst),
                     control: Some(&scope.control),
                     limits,
-                    defer_cleanup: true,
+                    defer_cleanup: false,
                 },
             )
         })();
