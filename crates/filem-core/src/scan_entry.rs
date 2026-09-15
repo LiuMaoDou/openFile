@@ -86,7 +86,7 @@ impl Metadata {
     }
 }
 pub(crate) enum Entry {
-    Standard(fs::DirEntry),
+    Standard(Box<fs::DirEntry>),
     #[cfg(windows)]
     Native {
         path: PathBuf,
@@ -128,7 +128,7 @@ impl Entry {
     }
 }
 pub(crate) enum Entries {
-    Standard(fs::ReadDir),
+    Standard(Box<fs::ReadDir>),
     #[cfg(windows)]
     Native(native::Entries),
 }
@@ -137,13 +137,15 @@ pub(crate) fn read_dir(path: &Path) -> io::Result<Entries> {
     if let Ok(entries) = native::Entries::open(path) {
         return Ok(Entries::Native(entries));
     }
-    fs::read_dir(path).map(Entries::Standard)
+    fs::read_dir(path).map(|entries| Entries::Standard(Box::new(entries)))
 }
 impl Iterator for Entries {
     type Item = io::Result<Entry>;
     fn next(&mut self) -> Option<Self::Item> {
         match self {
-            Self::Standard(iter) => iter.next().map(|e| e.map(Entry::Standard)),
+            Self::Standard(iter) => iter
+                .next()
+                .map(|e| e.map(|entry| Entry::Standard(Box::new(entry)))),
             #[cfg(windows)]
             Self::Native(iter) => iter.next(),
         }
@@ -262,10 +264,12 @@ mod native {
                 };
                 let bytes = record.FileNameLength as usize;
                 let next = record.NextEntryOffset as usize;
-                if bytes % 2 != 0
+                if !bytes.is_multiple_of(2)
                     || self.offset + base + bytes > capacity
                     || (next != 0
-                        && (next % 8 != 0 || next < base + bytes || self.offset + next >= capacity))
+                        && (!next.is_multiple_of(8)
+                            || next < base + bytes
+                            || self.offset + next >= capacity))
                 {
                     self.ended = true;
                     return Some(Err(io::Error::other("invalid directory record length")));
