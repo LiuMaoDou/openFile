@@ -1,0 +1,531 @@
+{
+  "architecture": "x86_64",
+  "note": "Synthetic local warm-cache metadata scans, watch/content disabled; temporary instrumented copy of current worktree. Raw traversal names/types only, not an equivalent index. Not Windows or competitor timings.",
+  "platform": "macos",
+  "results": [
+    {
+      "directories": 2,
+      "files": 30000,
+      "raw_names_only_ms": 50.937359,
+      "scan_ms_with_debounce_polling": [
+        1451.799174,
+        1089.862826,
+        1075.419035
+      ],
+      "shape": "flat",
+      "threads": 1
+    },
+    {
+      "directories": 2,
+      "files": 30000,
+      "raw_names_only_ms": 50.937359,
+      "scan_ms_with_debounce_polling": [
+        1402.676087,
+        926.358024,
+        908.154581
+      ],
+      "shape": "flat",
+      "threads": 4
+    },
+    {
+      "directories": 2,
+      "files": 30000,
+      "raw_names_only_ms": 50.937359,
+      "scan_ms_with_debounce_polling": [
+        1493.98965,
+        910.470729,
+        906.938796
+      ],
+      "shape": "flat",
+      "threads": 8
+    },
+    {
+      "directories": 101,
+      "files": 30000,
+      "raw_names_only_ms": 42.256318,
+      "scan_ms_with_debounce_polling": [
+        1151.739655,
+        1017.652786,
+        1143.187682
+      ],
+      "shape": "tree",
+      "threads": 1
+    },
+    {
+      "directories": 101,
+      "files": 30000,
+      "raw_names_only_ms": 42.256318,
+      "scan_ms_with_debounce_polling": [
+        1424.4628480000001,
+        1068.5714799999998,
+        784.561928
+      ],
+      "shape": "tree",
+      "threads": 4
+    },
+    {
+      "directories": 101,
+      "files": 30000,
+      "raw_names_only_ms": 42.256318,
+      "scan_ms_with_debounce_polling": [
+        1051.988819,
+        907.000727,
+        1070.081662
+      ],
+      "shape": "tree",
+      "threads": 8
+    },
+    {
+      "directories": 10001,
+      "files": 30000,
+      "raw_names_only_ms": 679.4005360000001,
+      "scan_ms_with_debounce_polling": [
+        3534.9606380000005,
+        2801.191432,
+        2985.0303719999997
+      ],
+      "shape": "many_dirs",
+      "threads": 1
+    },
+    {
+      "directories": 10001,
+      "files": 30000,
+      "raw_names_only_ms": 679.4005360000001,
+      "scan_ms_with_debounce_polling": [
+        2236.567803,
+        1679.1970279999998,
+        1688.6160260000001
+      ],
+      "shape": "many_dirs",
+      "threads": 4
+    },
+    {
+      "directories": 10001,
+      "files": 30000,
+      "raw_names_only_ms": 679.4005360000001,
+      "scan_ms_with_debounce_polling": [
+        1997.906,
+        2366.916495,
+        3361.741508
+      ],
+      "shape": "many_dirs",
+      "threads": 8
+    }
+  ],
+  "phase_results": [
+    {
+      "directories": 2,
+      "files": 30000,
+      "raw_names_only_ms": 50.937359,
+      "scan_ms_with_debounce_polling": [
+        1451.799174,
+        1089.862826,
+        1075.419035
+      ],
+      "shape": "flat",
+      "threads": 1,
+      "phase_samples": [
+        {
+          "counting_ms": 100.217819,
+          "directories": 2,
+          "elapsed_ms": 1211,
+          "files": 30000,
+          "finalize_ms": 29.074708,
+          "pipeline_ms": 1082.552873,
+          "scopes": 1,
+          "write_ms": 1066
+        },
+        {
+          "counting_ms": 125.68569099999999,
+          "directories": 2,
+          "elapsed_ms": 743,
+          "files": 30000,
+          "finalize_ms": 112.14815899999999,
+          "pipeline_ms": 505.80169399999994,
+          "scopes": 1,
+          "write_ms": 476
+        },
+        {
+          "counting_ms": 178.334496,
+          "directories": 2,
+          "elapsed_ms": 803,
+          "files": 30000,
+          "finalize_ms": 26.727463999999998,
+          "pipeline_ms": 598.544422,
+          "scopes": 1,
+          "write_ms": 558
+        }
+      ]
+    },
+    {
+      "directories": 2,
+      "files": 30000,
+      "raw_names_only_ms": 50.937359,
+      "scan_ms_with_debounce_polling": [
+        1402.676087,
+        926.358024,
+        908.154581
+      ],
+      "shape": "flat",
+      "threads": 4,
+      "phase_samples": [
+        {
+          "counting_ms": 111.971964,
+          "directories": 2,
+          "elapsed_ms": 1142,
+          "files": 30000,
+          "finalize_ms": 26.498355,
+          "pipeline_ms": 1004.4574859999999,
+          "scopes": 1,
+          "write_ms": 988
+        },
+        {
+          "counting_ms": 102.836338,
+          "directories": 2,
+          "elapsed_ms": 600,
+          "files": 30000,
+          "finalize_ms": 31.393698999999998,
+          "pipeline_ms": 466.76509,
+          "scopes": 1,
+          "write_ms": 449
+        },
+        {
+          "counting_ms": 102.898546,
+          "directories": 2,
+          "elapsed_ms": 658,
+          "files": 30000,
+          "finalize_ms": 21.644336,
+          "pipeline_ms": 533.941935,
+          "scopes": 1,
+          "write_ms": 508
+        }
+      ]
+    },
+    {
+      "directories": 2,
+      "files": 30000,
+      "raw_names_only_ms": 50.937359,
+      "scan_ms_with_debounce_polling": [
+        1493.98965,
+        910.470729,
+        906.938796
+      ],
+      "shape": "flat",
+      "threads": 8,
+      "phase_samples": [
+        {
+          "counting_ms": 159.511182,
+          "directories": 2,
+          "elapsed_ms": 1214,
+          "files": 30000,
+          "finalize_ms": 22.012758,
+          "pipeline_ms": 1033.431642,
+          "scopes": 1,
+          "write_ms": 1014
+        },
+        {
+          "counting_ms": 96.509412,
+          "directories": 2,
+          "elapsed_ms": 626,
+          "files": 30000,
+          "finalize_ms": 23.133649,
+          "pipeline_ms": 506.97400400000004,
+          "scopes": 1,
+          "write_ms": 489
+        },
+        {
+          "counting_ms": 104.53280600000001,
+          "directories": 2,
+          "elapsed_ms": 569,
+          "files": 30000,
+          "finalize_ms": 26.444204,
+          "pipeline_ms": 438.470951,
+          "scopes": 1,
+          "write_ms": 423
+        }
+      ]
+    },
+    {
+      "directories": 101,
+      "files": 30000,
+      "raw_names_only_ms": 42.256318,
+      "scan_ms_with_debounce_polling": [
+        1151.739655,
+        1017.652786,
+        1143.187682
+      ],
+      "shape": "tree",
+      "threads": 1,
+      "phase_samples": [
+        {
+          "counting_ms": 103.3811,
+          "directories": 101,
+          "elapsed_ms": 906,
+          "files": 30000,
+          "finalize_ms": 21.821472,
+          "pipeline_ms": 780.981981,
+          "scopes": 1,
+          "write_ms": 672
+        },
+        {
+          "counting_ms": 106.326845,
+          "directories": 101,
+          "elapsed_ms": 679,
+          "files": 30000,
+          "finalize_ms": 110.08064200000001,
+          "pipeline_ms": 462.63196800000003,
+          "scopes": 1,
+          "write_ms": 365
+        },
+        {
+          "counting_ms": 100.738924,
+          "directories": 101,
+          "elapsed_ms": 723,
+          "files": 30000,
+          "finalize_ms": 135.0805,
+          "pipeline_ms": 487.867829,
+          "scopes": 1,
+          "write_ms": 385
+        }
+      ]
+    },
+    {
+      "directories": 101,
+      "files": 30000,
+      "raw_names_only_ms": 42.256318,
+      "scan_ms_with_debounce_polling": [
+        1424.4628480000001,
+        1068.5714799999998,
+        784.561928
+      ],
+      "shape": "tree",
+      "threads": 4,
+      "phase_samples": [
+        {
+          "counting_ms": 112.319406,
+          "directories": 101,
+          "elapsed_ms": 1059,
+          "files": 30000,
+          "finalize_ms": 31.956021,
+          "pipeline_ms": 915.030385,
+          "scopes": 1,
+          "write_ms": 882
+        },
+        {
+          "counting_ms": 40.529222,
+          "directories": 101,
+          "elapsed_ms": 727,
+          "files": 30000,
+          "finalize_ms": 135.961462,
+          "pipeline_ms": 551.011996,
+          "scopes": 1,
+          "write_ms": 522
+        },
+        {
+          "counting_ms": 39.701777,
+          "directories": 101,
+          "elapsed_ms": 556,
+          "files": 30000,
+          "finalize_ms": 20.103897999999997,
+          "pipeline_ms": 496.792864,
+          "scopes": 1,
+          "write_ms": 473
+        }
+      ]
+    },
+    {
+      "directories": 101,
+      "files": 30000,
+      "raw_names_only_ms": 42.256318,
+      "scan_ms_with_debounce_polling": [
+        1051.988819,
+        907.000727,
+        1070.081662
+      ],
+      "shape": "tree",
+      "threads": 8,
+      "phase_samples": [
+        {
+          "counting_ms": 31.171395,
+          "directories": 101,
+          "elapsed_ms": 716,
+          "files": 30000,
+          "finalize_ms": 31.575781999999997,
+          "pipeline_ms": 653.583628,
+          "scopes": 1,
+          "write_ms": 634
+        },
+        {
+          "counting_ms": 28.318579,
+          "directories": 101,
+          "elapsed_ms": 569,
+          "files": 30000,
+          "finalize_ms": 90.37714600000001,
+          "pipeline_ms": 450.69523,
+          "scopes": 1,
+          "write_ms": 426
+        },
+        {
+          "counting_ms": 32.279161,
+          "directories": 101,
+          "elapsed_ms": 759,
+          "files": 30000,
+          "finalize_ms": 27.432138,
+          "pipeline_ms": 699.806942,
+          "scopes": 1,
+          "write_ms": 658
+        }
+      ]
+    },
+    {
+      "directories": 10001,
+      "files": 30000,
+      "raw_names_only_ms": 679.4005360000001,
+      "scan_ms_with_debounce_polling": [
+        3534.9606380000005,
+        2801.191432,
+        2985.0303719999997
+      ],
+      "shape": "many_dirs",
+      "threads": 1,
+      "phase_samples": [
+        {
+          "counting_ms": 852.961682,
+          "directories": 10001,
+          "elapsed_ms": 3300,
+          "files": 30000,
+          "finalize_ms": 30.146999,
+          "pipeline_ms": 2416.925108,
+          "scopes": 1,
+          "write_ms": 1182
+        },
+        {
+          "counting_ms": 875.946001,
+          "directories": 10001,
+          "elapsed_ms": 2560,
+          "files": 30000,
+          "finalize_ms": 26.115192999999998,
+          "pipeline_ms": 1658.080471,
+          "scopes": 1,
+          "write_ms": 459
+        },
+        {
+          "counting_ms": 863.7998,
+          "directories": 10001,
+          "elapsed_ms": 2704,
+          "files": 30000,
+          "finalize_ms": 37.823786,
+          "pipeline_ms": 1802.7484459999998,
+          "scopes": 1,
+          "write_ms": 500
+        }
+      ]
+    },
+    {
+      "directories": 10001,
+      "files": 30000,
+      "raw_names_only_ms": 679.4005360000001,
+      "scan_ms_with_debounce_polling": [
+        2236.567803,
+        1679.1970279999998,
+        1688.6160260000001
+      ],
+      "shape": "many_dirs",
+      "threads": 4,
+      "phase_samples": [
+        {
+          "counting_ms": 418.405211,
+          "directories": 10001,
+          "elapsed_ms": 1967,
+          "files": 30000,
+          "finalize_ms": 31.589961,
+          "pipeline_ms": 1517.6759149999998,
+          "scopes": 1,
+          "write_ms": 1039
+        },
+        {
+          "counting_ms": 363.940352,
+          "directories": 10001,
+          "elapsed_ms": 1350,
+          "files": 30000,
+          "finalize_ms": 105.067216,
+          "pipeline_ms": 881.548313,
+          "scopes": 1,
+          "write_ms": 411
+        },
+        {
+          "counting_ms": 389.774041,
+          "directories": 10001,
+          "elapsed_ms": 1381,
+          "files": 30000,
+          "finalize_ms": 28.412835,
+          "pipeline_ms": 963.669308,
+          "scopes": 1,
+          "write_ms": 442
+        }
+      ]
+    },
+    {
+      "directories": 10001,
+      "files": 30000,
+      "raw_names_only_ms": 679.4005360000001,
+      "scan_ms_with_debounce_polling": [
+        1997.906,
+        2366.916495,
+        3361.741508
+      ],
+      "shape": "many_dirs",
+      "threads": 8,
+      "phase_samples": [
+        {
+          "counting_ms": 284.291421,
+          "directories": 10001,
+          "elapsed_ms": 1763,
+          "files": 30000,
+          "finalize_ms": 24.576863,
+          "pipeline_ms": 1455.097849,
+          "scopes": 1,
+          "write_ms": 1054
+        },
+        {
+          "counting_ms": 559.18721,
+          "directories": 10001,
+          "elapsed_ms": 2011,
+          "files": 30000,
+          "finalize_ms": 43.740487,
+          "pipeline_ms": 1409.065513,
+          "scopes": 1,
+          "write_ms": 628
+        },
+        {
+          "counting_ms": 313.409282,
+          "directories": 10001,
+          "elapsed_ms": 3020,
+          "files": 30000,
+          "finalize_ms": 139.150148,
+          "pipeline_ms": 2568.2817299999997,
+          "scopes": 1,
+          "write_ms": 1202
+        }
+      ]
+    }
+  ],
+  "date": "2026-09-15",
+  "source_sha256": {
+    "crates/filem-core/src/scan.rs": "725c6695552f84cd2e3e73a05b32962e4617505d8222bb1b6c192283db552d46",
+    "crates/filem-core/src/lib.rs": "b55d9c3fd33a7205f66fc2ed85534b707d1a8972a10ff98d8e16127a6f50ca76",
+    "crates/filem-core/src/scan_schedule.rs": "6ec70cda3a152c5be297386100655f2e7452832b87f6f66a249329c4987ececc",
+    "crates/filem-core/src/db.rs": "bcb2e36d3d8bfa6e1161eff1b8d78a959506c5c9d590bdbd39b3a489053a2357",
+    "crates/filem-core/src/content.rs": "bffc11c8f91ed6536c9f688df9b36b20abf15deb8a1c2022ad90d66d75a4f72f",
+    "crates/filem-core/src/extract.rs": "a35d0568e8327733da272d845cf19fbf3e30042f3e8fea4e72fd12e2ea58d9ce"
+  },
+  "method": {
+    "fixture": "30000 files of 19 bytes per case; one populated directory, 100 populated directories, or 10000 populated directories; includes an extra root directory",
+    "runs": "1 fresh-index scan and 2 unchanged refreshes per thread setting; sequential order 1,4,8; same freshly-created fixture per shape",
+    "instrumentation": "Temporary source copy only. Added stage timers around directory census, read/write pipeline, and finalization. Replaced fixed pool size by an environment variable in that copy. Release build.",
+    "thread_note": "1/4/8 are reader pool sizes, not total process thread counts; the writer and background workers also exist",
+    "limits": "macOS warm-cache synthetic fixtures only; no Windows, cold-cache, HDD, SMB, real documents, or competitor measurement. System load was not controlled; another audit also ran database experiments. Two refresh samples per setting are insufficient to establish stable speedup, particularly the noisy 8-thread result.",
+    "writer_note": "write_ms is elapsed time spent in write_batch including lock/commit waits; readers run concurrently. It is not CPU time and must not be added to pipeline_ms.",
+    "baseline_note": "raw_names_only_ms merely counts names/types and does not perform equivalent metadata indexing or correctness checks."
+  }
+}

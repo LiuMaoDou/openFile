@@ -107,6 +107,7 @@ impl Engine {
         if !needed(control) {
             return Ok(());
         }
+        let requests = self.inner.scan_requests.lock().unwrap();
         let roots: Vec<(String, PathBuf, String)> = {
             let c = self.lock()?;
             let mut statement = c.prepare("SELECT id,root,identity FROM scopes")?;
@@ -169,18 +170,53 @@ impl Engine {
                 .unwrap_or("unknown")
                 .to_owned(),
         );
+        if full {
+            // One global directory plan at a time; the directory worker pool
+            // remains parallel. Later additions and rescans form the next batch.
+            volumes.push("filem-full-scan-batch".into());
+        }
         volumes.sort();
         volumes.dedup();
+        drop(requests);
         let Some(_permit) = self
             .inner
             .scan_scheduler
-            .enter(leader, volumes, || needed(control))
+            .enter(leader, volumes.clone(), || needed(control))
         else {
             return Ok(());
         };
 
+        let requests = self.inner.scan_requests.lock().unwrap();
+        // Requests may have joined while this worker waited for the previous
+        // batch. Replan admission so every newly pending root joins the next
+        // batch, with its volume reserved before counting starts.
+        if full
+            && self
+                .inner
+                .controls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(scope, c)| {
+                    needed(c)
+                        && c.pending.lock().unwrap().full
+                        && !group.iter().any(|(planned, _, _)| planned == scope)
+                })
+        {
+            drop(requests);
+            drop(_permit);
+            return self.scan_pending(id, control);
+        }
         let work = {
             let mut pending = control.pending.lock().unwrap();
+            // A refresh or watcher overflow can upgrade a queued incremental job.
+            // Re-enter with the global batch permit before consuming that request.
+            if !full && pending.full {
+                drop(pending);
+                drop(requests);
+                drop(_permit);
+                return self.scan_pending(id, control);
+            }
             if control.cancel.load(Ordering::SeqCst) || control.removed.load(Ordering::SeqCst) {
                 return Ok(());
             }
@@ -206,6 +242,7 @@ impl Engine {
                     targets.push((scope.clone(), other.clone()));
                 }
             }
+            drop(requests);
             if let Err(error) =
                 scan::run_group_with_reason(self, &targets, work.reason.unwrap_or("完整核对"))
             {
@@ -224,17 +261,32 @@ impl Engine {
                 }
             }
             Ok(())
-        } else if work.paths.is_empty()
-            || scan::update_files(
-                self,
-                id,
-                control,
-                &work.paths.into_iter().collect::<Vec<_>>(),
-            )?
-        {
-            Ok(())
         } else {
-            scan::run(self, id, control)
+            drop(requests);
+            if work.paths.is_empty()
+                || scan::update_files(
+                    self,
+                    id,
+                    control,
+                    &work.paths.into_iter().collect::<Vec<_>>(),
+                )?
+            {
+                Ok(())
+            } else {
+                drop(_permit);
+                volumes.push("filem-full-scan-batch".into());
+                let Some(_batch) =
+                    self.inner
+                        .scan_scheduler
+                        .enter(own_root.clone(), volumes, || {
+                            !control.cancel.load(Ordering::SeqCst)
+                                && !control.removed.load(Ordering::SeqCst)
+                        })
+                else {
+                    return Ok(());
+                };
+                scan::run(self, id, control)
+            }
         }
     }
 }
@@ -285,6 +337,37 @@ mod tests {
             });
             assert!(scheduler.state.lock().unwrap().active.is_empty());
         }
+    }
+
+    #[test]
+    fn later_full_batches_wait_even_on_a_different_volume() {
+        let scheduler = Scheduler::default();
+        let first = scheduler
+            .enter(
+                "left".into(),
+                vec!["disk-a".into(), "filem-full-scan-batch".into()],
+                || true,
+            )
+            .unwrap();
+        thread::scope(|threads| {
+            let (sender, receiver) = mpsc::channel();
+            let scheduler_ref = &scheduler;
+            let worker = threads.spawn(move || {
+                let _second = scheduler_ref
+                    .enter(
+                        "right".into(),
+                        vec!["disk-b".into(), "filem-full-scan-batch".into()],
+                        || true,
+                    )
+                    .unwrap();
+                sender.send(()).unwrap();
+            });
+            wait_for_queue(&scheduler, 1);
+            assert!(receiver.try_recv().is_err());
+            drop(first);
+            receiver.recv_timeout(Duration::from_secs(3)).unwrap();
+            worker.join().unwrap();
+        });
     }
 
     #[test]

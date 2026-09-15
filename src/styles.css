@@ -1302,117 +1302,128 @@ main {
   }
 }
 .scan-status {
+  margin: 0 28px 4px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+  font-size: 12px;
+  color: var(--text);
+}
+.scan-status-summary {
   display: flex;
   align-items: center;
-  gap: 9px;
-  margin: 0 28px 4px;
-  padding: 10px 12px;
-  background: var(--success-bg);
-  border: 1px solid var(--success-border);
-  border-radius: 7px;
-  color: var(--success);
-  font-size: 12px;
   flex-wrap: wrap;
+  gap: 10px 16px;
+  min-height: 42px;
+  padding: 10px 12px;
+  cursor: pointer;
+  list-style: none;
 }
-.scan-status.incomplete {
-  background: var(--warning-bg);
-  border-color: var(--warning-border);
+.scan-status-summary::-webkit-details-marker {
+  display: none;
+}
+.scan-status-summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.scan-status-label,
+.scan-status-toggle,
+.scan-progress-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.scan-status-label svg {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.scan-status.incomplete .scan-status-label svg {
   color: var(--warning);
 }
-.scan-status > span {
+.scan-status-label strong {
+  font-weight: 500;
+}
+.scan-status-metric {
   color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
-.scan-completed {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-}
-.scan-progress-list {
-  flex-basis: 100%;
-  min-width: 0;
-  display: grid;
-  gap: 12px;
-  border-top: 1px solid var(--success-border);
-  padding-top: 10px;
-}
-.scan-progress-item {
-  min-width: 0;
-}
-.scan-progress-heading,
-.scan-progress-detail,
-.scan-progress-meter {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-.scan-progress-heading {
-  flex-wrap: wrap;
-}
-.scan-progress-heading > strong {
-  max-width: 45%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.scan-progress-time {
+.scan-status-toggle {
+  color: var(--muted);
   margin-left: auto;
 }
+.scan-status[open] .scan-status-toggle svg {
+  transform: rotate(180deg);
+}
 .scan-progress-meter {
-  margin: 8px 0 6px;
+  flex: 0 1 150px;
+  min-width: 100px;
 }
 .scan-progress-meter progress {
-  flex: 1;
+  width: 100%;
   min-width: 0;
-  height: 7px;
+  height: 4px;
   border: 0;
   border-radius: 8px;
   overflow: hidden;
   appearance: none;
-  background: var(--success-border);
-  accent-color: var(--success);
+  background: var(--border);
+  accent-color: var(--accent);
 }
 .scan-progress-meter progress::-webkit-progress-bar {
-  background: var(--success-border);
+  background: var(--border);
 }
 .scan-progress-meter progress::-webkit-progress-value {
-  background: var(--success);
+  background: var(--accent);
   border-radius: 8px;
 }
 .scan-progress-meter progress::-moz-progress-bar {
-  background: var(--success);
+  background: var(--accent);
   border-radius: 8px;
 }
-.scan-progress-meter > strong {
-  min-width: 42px;
-  text-align: right;
+.scan-progress-meter strong {
+  font-size: 11px;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
 .scan-progress-meter progress:indeterminate {
-  opacity: 0.55;
+  opacity: 0.5;
 }
-.scan-stalled {
-  margin: 8px 0 0;
+.scan-status.paused .scan-progress-meter {
+  opacity: 0.5;
+}
+.scan-status-details {
+  border-top: 1px solid var(--border);
+  padding: 12px;
+  max-height: 230px;
+  overflow: auto;
+  color: var(--muted);
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.scan-performance, .scan-performance label {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.scan-performance select { padding: 5px 30px 5px 8px; }
+.scan-performance [role="alert"] { color: var(--danger); }
+.scan-status-details > * + * {
+  margin-top: 8px;
+}
+.scan-task-detail + .scan-task-detail {
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.scan-stalled,
+.scan-issue {
   color: var(--warning);
-  line-height: 1.6;
 }
 .sidebar-version {
   padding: 6px 12px 0;
   color: var(--muted);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
-}
-.scan-progress-detail {
-  flex-wrap: wrap;
-  color: var(--muted);
-}
-.scan-progress-path {
-  margin-top: 5px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--muted);
 }
 .scope-link .scope-name-status {
   min-width: 0;

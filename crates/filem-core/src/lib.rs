@@ -8,9 +8,11 @@ mod moving;
 pub fn run_helper_if_requested() -> bool {
     extract::run_helper_if_requested() || everything::run_helper_if_requested()
 }
+mod performance;
 mod platform;
 mod rules;
 mod scan;
+mod scan_entry;
 mod scan_gate;
 mod scan_progress;
 mod scan_schedule;
@@ -44,6 +46,7 @@ pub struct Engine {
 struct Inner {
     db: Mutex<Connection>,
     query_db: Mutex<Connection>,
+    content_db: Mutex<Connection>,
     status_db: Mutex<Connection>,
     summary_cache: Mutex<Option<Summary>>,
     // Keep the OS lock until SQLite and every background worker have closed.
@@ -51,12 +54,13 @@ struct Inner {
     storage: PathBuf,
     controls: Mutex<HashMap<String, Arc<Control>>>,
     watchers: Mutex<HashMap<String, notify::RecommendedWatcher>>,
-    pool: rayon::ThreadPool,
+    pool: Mutex<Arc<rayon::ThreadPool>>,
     file_operations: Mutex<()>,
     everything_query: Mutex<()>,
     scan_gate: scan_gate::ScanGate,
     scan_scheduler: scan_schedule::Scheduler,
     scan_runs: Mutex<scan_progress::Registry>,
+    scan_requests: Mutex<()>,
 }
 pub(crate) struct Control {
     sender: SyncSender<()>,
@@ -109,6 +113,14 @@ impl Engine {
                 )?;
                 Ok(to_value(summary)?)
             }
+            "performance" => Ok(to_value(self.performance()?)?),
+            "set_performance" => Ok(to_value(
+                self.set_performance(
+                    args.get("mode")
+                        .and_then(|v| v.as_str())
+                        .context("缺少性能模式")?,
+                )?,
+            )?),
             "query" => Ok(to_value(self.query(&serde_json::from_value(args)?)?)?),
             "add_scope" => Ok(json!({"id":self.add_scope(serde_json::from_value(args)?)?})),
             "update_scope" => {
@@ -126,9 +138,14 @@ impl Engine {
                 if let Some(id) = args.get("id").and_then(|v| v.as_str()) {
                     self.refresh(id)?;
                 } else {
-                    for scope in self.summary()?.scopes {
-                        self.refresh(&scope.id)?;
-                    }
+                    self.refresh_many(
+                        &self
+                            .summary()?
+                            .scopes
+                            .iter()
+                            .map(|s| s.id.clone())
+                            .collect::<Vec<_>>(),
+                    )?;
                 }
                 Ok(json!(null))
             }
@@ -264,26 +281,31 @@ impl Engine {
             inner: Arc::new(Inner {
                 db: Mutex::new(db::connect(path)?),
                 query_db: Mutex::new(db::connect_reader(path)?),
+                content_db: Mutex::new(db::connect_reader(path)?),
                 status_db: Mutex::new(db::connect_reader(path)?),
                 summary_cache: Mutex::new(None),
                 _index_lock: index_lock,
                 storage,
                 controls: Mutex::new(HashMap::new()),
                 watchers: Mutex::new(HashMap::new()),
-                pool: rayon::ThreadPoolBuilder::new().num_threads(4).build()?,
+                pool: Mutex::new(Arc::new(
+                    rayon::ThreadPoolBuilder::new().num_threads(1).build()?,
+                )),
                 file_operations: Mutex::new(()),
                 everything_query: Mutex::new(()),
                 scan_gate: scan_gate::ScanGate::default(),
                 scan_scheduler: scan_schedule::Scheduler::default(),
                 scan_runs: Mutex::new(scan_progress::Registry::default()),
+                scan_requests: Mutex::new(()),
             }),
         };
+        engine.configure_performance()?;
         engine.start_content_worker();
         let scopes = engine.summary()?.scopes;
-        for scope in scopes {
+        for scope in &scopes {
             engine.register(&scope.id)?;
-            engine.refresh(&scope.id)?;
         }
+        engine.refresh_many(&scopes.iter().map(|s| s.id.clone()).collect::<Vec<_>>())?;
         Ok(engine)
     }
     fn lock(&self) -> Result<MutexGuard<'_, Connection>> {
@@ -427,27 +449,45 @@ impl Engine {
         Ok(())
     }
     pub fn refresh(&self, id: &str) -> Result<()> {
-        let control = self
-            .inner
-            .controls
-            .lock()
-            .unwrap()
-            .get(id)
-            .context("文件夹不存在")?
-            .clone();
-        self.configure_watch(id)?;
-        control.cancel.store(false, Ordering::SeqCst);
+        self.refresh_many(&[id.to_owned()])
+    }
+    fn refresh_many(&self, ids: &[String]) -> Result<()> {
+        // Publish the entire request before any worker can claim it. Watcher
+        // setup may take longer than the worker debounce interval on Windows.
+        let _requests = self.inner.scan_requests.lock().unwrap();
+        let controls = self.inner.controls.lock().unwrap().clone();
+        let targets = ids
+            .iter()
+            .map(|id| {
+                controls
+                    .get(id)
+                    .cloned()
+                    .map(|control| (id, control))
+                    .context("文件夹不存在")
+            })
+            .collect::<Result<Vec<_>>>()?;
+        for (id, _) in &targets {
+            self.configure_watch(id)?;
+        }
         {
-            let mut pending = control.pending.lock().unwrap();
-            pending.rescan();
+            let mut c = self.lock()?;
+            let tx = c.transaction()?;
+            for (id, _) in &targets {
+                tx.execute("UPDATE scopes SET freshness='verifying' WHERE id=?", [id])?;
+            }
+            if !targets.is_empty() {
+                db::bump(&tx)?;
+            }
+            tx.commit()?;
+        }
+        for (_, control) in &targets {
+            control.cancel.store(false, Ordering::SeqCst);
+            control.pending.lock().unwrap().rescan();
             control.dirty.store(true, Ordering::SeqCst);
         }
-        {
-            let c = self.lock()?;
-            c.execute("UPDATE scopes SET freshness='verifying' WHERE id=?", [id])?;
-            db::bump(&c)?;
+        for (_, control) in targets {
+            let _ = control.sender.try_send(());
         }
-        let _ = control.sender.try_send(());
         Ok(())
     }
     pub fn cancel(&self, id: &str) -> Result<()> {
@@ -479,7 +519,6 @@ impl Engine {
             .lock()
             .unwrap()
             .insert(id.into(), control.clone());
-        self.configure_watch(id)?;
         let weak = Arc::downgrade(&self.inner);
         let weak_control = Arc::downgrade(&control);
         let id = id.to_string();

@@ -1,7 +1,7 @@
 //! Durable per-folder content indexing. FTS and file references share transactions.
 use crate::{db, extract, model::*, platform::*, Engine};
 use anyhow::{bail, Context, Result};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection};
 use serde::Serialize;
 use std::{sync::Arc, thread, time::Duration};
 
@@ -137,6 +137,11 @@ struct Job {
     version: i64,
     epoch: i64,
 }
+struct PreparedContent {
+    job: Job,
+    initial: (std::path::PathBuf, String, u64, i64, u32),
+    output: Result<extract::Extracted>,
+}
 impl Engine {
     pub(crate) fn start_content_worker(&self) {
         if cfg!(test) {
@@ -144,33 +149,100 @@ impl Engine {
         }
         let weak = Arc::downgrade(&self.inner);
         thread::spawn(move || {
+            use rayon::prelude::*;
+            let mut pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(2)
+                .build()
+                .unwrap();
             let mut after_id = 0i64;
+            let mut exhausted_revision = None;
             loop {
                 let Some(inner) = weak.upgrade() else {
                     break;
                 };
                 let engine = Engine { inner };
-                let job = engine.next_content_job_after(after_id);
-                let has_job = matches!(&job, Ok(Some(_)));
-                if let Ok(Some(job)) = job {
-                    after_id = job.id.parse().unwrap_or(0);
-                    let _ = engine.index_content_job(&job);
-                } else {
-                    after_id = 0;
+                let desired = engine.performance().map_or(2, |s| s.content_threads);
+                if pool.current_num_threads() != desired {
+                    if let Ok(next) = rayon::ThreadPoolBuilder::new().num_threads(desired).build() {
+                        pool = next;
+                    }
                 }
-                drop(engine);
-                thread::sleep(Duration::from_millis(if has_job { 15 } else { 500 }));
+                // Once caught up, only a committed change can introduce work.
+                // Read the revision before selecting: a concurrent commit then
+                // causes another pass, never a missed wakeup.
+                let revision = engine
+                    .inner
+                    .content_db
+                    .lock()
+                    .ok()
+                    .and_then(|c| db::revision(&c).ok());
+                if revision.is_some() && revision == exhausted_revision {
+                    drop(engine);
+                    thread::sleep(Duration::from_millis(500));
+                    continue;
+                }
+                let jobs = match engine.next_content_jobs_after(after_id, 128) {
+                    Ok(jobs) => jobs,
+                    Err(_) => {
+                        drop(engine);
+                        thread::sleep(Duration::from_millis(500));
+                        continue;
+                    }
+                };
+                if jobs.is_empty() {
+                    exhausted_revision = if after_id == 0 { revision } else { None };
+                    after_id = 0;
+                    drop(engine);
+                    thread::sleep(Duration::from_millis(500));
+                    continue;
+                }
+                after_id = jobs.last().and_then(|j| j.id.parse().ok()).unwrap_or(0);
+                // Limit extracted text awaiting a commit to 8 * MAX_TEXT, while
+                // keeping the configured parser workers alive across batches.
+                for chunk in jobs.chunks(8) {
+                    let prepared: Vec<_> = pool.install(|| {
+                        chunk
+                            .par_iter()
+                            .filter_map(|job| engine.prepare_content_job(job).ok().flatten())
+                            .collect()
+                    });
+                    let _ = engine.commit_content_jobs(prepared);
+                }
             }
         });
     }
     #[cfg(test)]
     fn next_content_job(&self) -> Result<Option<Job>> {
-        self.next_content_job_after(0)
+        Ok(self.next_content_jobs_after(0, 1)?.into_iter().next())
     }
-    fn next_content_job_after(&self, after_id: i64) -> Result<Option<Job>> {
-        let c = self.lock()?;
-        Ok(c.query_row(&format!("SELECT e.id,s.id,s.config_version,s.content_epoch FROM entries e JOIN memberships m ON m.entry_id=e.id JOIN scopes s ON s.id=m.scope_id LEFT JOIN content_items ci ON ci.entry_id=e.id
-            WHERE e.id>? AND ci.entry_id IS NULL AND e.extension IN ({EXTENSIONS}) AND s.content_enabled=1 AND s.content_paused=0 AND s.availability='available' AND s.freshness IN ('current','partial') ORDER BY e.id,s.depth DESC LIMIT 1"), [after_id], |r| Ok(Job { id:r.get::<_, i64>(0)?.to_string(), scope:r.get(1)?, version:r.get(2)?, epoch:r.get(3)? })).optional()?)
+    fn next_content_jobs_after(&self, after_id: i64, limit: usize) -> Result<Vec<Job>> {
+        let c = self.inner.content_db.lock().unwrap();
+        let enabled: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM scopes WHERE content_enabled=1 AND content_paused=0 AND availability='available' AND freshness IN ('current','partial'))", [], |r| r.get(0))?;
+        if !enabled {
+            return Ok(Vec::new());
+        }
+        // Iterate the rowid range rather than sorting all extension candidates
+        // for every single job. Choose one eligible owner per entry locally.
+        let sql = format!("SELECT e.id,s.id,s.config_version,s.content_epoch FROM entries e NOT INDEXED
+            JOIN scopes s ON s.id=(SELECT cs.id FROM memberships m JOIN scopes cs ON cs.id=m.scope_id
+                WHERE m.entry_id=e.id AND cs.content_enabled=1 AND cs.content_paused=0
+                AND cs.availability='available' AND cs.freshness IN ('current','partial')
+                ORDER BY cs.depth DESC,cs.id LIMIT 1)
+            WHERE e.id>? AND e.extension IN ({EXTENSIONS})
+                AND NOT EXISTS(SELECT 1 FROM content_items ci WHERE ci.entry_id=e.id)
+            ORDER BY e.id LIMIT ?");
+        let mut statement = c.prepare_cached(&sql)?;
+        let jobs = statement
+            .query_map(params![after_id, limit as i64], |r| {
+                Ok(Job {
+                    id: r.get::<_, i64>(0)?.to_string(),
+                    scope: r.get(1)?,
+                    version: r.get(2)?,
+                    epoch: r.get(3)?,
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(jobs)
     }
     fn valid_content_job(&self, job: &Job) -> bool {
         self.lock().and_then(|c| Ok(c.query_row("SELECT EXISTS(SELECT 1 FROM memberships m JOIN scopes s ON s.id=m.scope_id WHERE m.entry_id=? AND s.id=? AND s.config_version=? AND s.content_epoch=? AND s.content_enabled=1 AND s.content_paused=0 AND s.availability='available')",params![job.id,job.scope,job.version,job.epoch],|r|r.get::<_,bool>(0))?)).unwrap_or(false)
@@ -202,7 +274,7 @@ impl Engine {
             mtime: time,
         })
     }
-    fn index_content_job(&self, job: &Job) -> Result<()> {
+    fn prepare_content_job(&self, job: &Job) -> Result<Option<PreparedContent>> {
         let initial = {
             let c = self.lock()?;
             db::entry_path(&c, &job.id)?
@@ -217,36 +289,63 @@ impl Engine {
             Ok(result)
         })();
         if !self.valid_content_job(job) {
+            return Ok(None);
+        }
+        Ok(Some(PreparedContent {
+            job: job.clone(),
+            initial,
+            output,
+        }))
+    }
+    #[cfg(test)]
+    fn index_content_job(&self, job: &Job) -> Result<()> {
+        self.commit_content_jobs(self.prepare_content_job(job)?.into_iter().collect())
+    }
+    fn commit_content_jobs(&self, prepared: Vec<PreparedContent>) -> Result<()> {
+        if prepared.is_empty() {
             return Ok(());
         }
         let mut c = self.lock()?;
         let tx = c.transaction()?;
-        let current = db::entry_path(&tx, &job.id)?;
-        if initial != current {
-            return Ok(());
-        }
-        let still_valid: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM scopes WHERE id=? AND content_enabled=1 AND content_paused=0 AND config_version=? AND content_epoch=?)", params![job.scope,job.version,job.epoch], |r| r.get(0))?;
-        if !still_valid {
-            return Ok(());
-        }
-        let (state, text, message, truncated) = match output {
-            Ok(v) => ("ready", v.text, v.note, v.truncated),
-            Err(e) => {
-                let message = format!("{e:#}");
-                let skipped = initial.2 > extract::MAX_FILE
-                    || message.contains("未提取到文字")
-                    || message.contains("占位")
-                    || message.contains("链接");
-                (
-                    if skipped { "skipped" } else { "failed" },
-                    String::new(),
-                    Some(message),
-                    false,
-                )
+        let mut changed = false;
+        for PreparedContent {
+            job,
+            initial,
+            output,
+        } in prepared
+        {
+            let Ok(current) = db::entry_path(&tx, &job.id) else {
+                continue;
+            };
+            if initial != current {
+                continue;
             }
-        };
-        tx.execute("INSERT INTO content_items(entry_id,identity,size,mtime,state,text,message,truncated,indexed_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(entry_id) DO UPDATE SET identity=excluded.identity,size=excluded.size,mtime=excluded.mtime,state=excluded.state,text=excluded.text,message=excluded.message,truncated=excluded.truncated,indexed_at=excluded.indexed_at", params![job.id,current.1,current.2 as i64,current.3,state,text,message,truncated,now()])?;
-        db::bump(&tx)?;
+            let still_valid: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM memberships m JOIN scopes s ON s.id=m.scope_id WHERE m.entry_id=? AND s.id=? AND s.content_enabled=1 AND s.content_paused=0 AND s.availability='available' AND s.config_version=? AND s.content_epoch=?)", params![job.id,job.scope,job.version,job.epoch], |r| r.get(0))?;
+            if !still_valid {
+                continue;
+            }
+            let (state, text, message, truncated) = match output {
+                Ok(v) => ("ready", v.text, v.note, v.truncated),
+                Err(e) => {
+                    let message = format!("{e:#}");
+                    let skipped = initial.2 > extract::MAX_FILE
+                        || message.contains("未提取到文字")
+                        || message.contains("占位")
+                        || message.contains("链接");
+                    (
+                        if skipped { "skipped" } else { "failed" },
+                        String::new(),
+                        Some(message),
+                        false,
+                    )
+                }
+            };
+            tx.execute("INSERT INTO content_items(entry_id,identity,size,mtime,state,text,message,truncated,indexed_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(entry_id) DO UPDATE SET identity=excluded.identity,size=excluded.size,mtime=excluded.mtime,state=excluded.state,text=excluded.text,message=excluded.message,truncated=excluded.truncated,indexed_at=excluded.indexed_at", params![job.id,current.1,current.2 as i64,current.3,state,text,message,truncated,now()])?;
+            changed = true;
+        }
+        if changed {
+            db::bump(&tx)?;
+        }
         tx.commit()?;
         Ok(())
     }
@@ -418,6 +517,45 @@ mod tests {
         })
         .unwrap()
     }
+    #[test]
+    fn batched_jobs_choose_one_owner_and_revalidate_before_commit() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("files");
+        fs::create_dir_all(root.join("nested")).unwrap();
+        for i in 0..12 {
+            fs::write(
+                root.join(format!("nested/{i}.txt")),
+                "original indexed text",
+            )
+            .unwrap();
+        }
+        let e = Engine::open(temp.path().join("state/index.sqlite")).unwrap();
+        let _parent = e.add_scope(input(&root, true)).unwrap();
+        let child = e.add_scope(input(&root.join("nested"), true)).unwrap();
+        wait_scan(&e);
+        let jobs = e.next_content_jobs_after(0, 128).unwrap();
+        assert_eq!(jobs.len(), 12);
+        assert!(jobs.iter().all(|j| j.scope == child));
+        let mut prepared = Vec::new();
+        for job in &jobs {
+            prepared.push(e.prepare_content_job(job).unwrap().unwrap());
+        }
+        // Revoking a scope after parsing must prevent every buffered result
+        // from being committed, not just the currently active parser's result.
+        e.content_action(&child, "pause").unwrap();
+        e.commit_content_jobs(prepared).unwrap();
+        assert_eq!(hits(&e, "original", "content", "").total, 0);
+        let jobs = e.next_content_jobs_after(0, 128).unwrap();
+        assert_eq!(jobs.len(), 12);
+        let prepared = jobs
+            .iter()
+            .filter_map(|j| e.prepare_content_job(j).unwrap())
+            .collect();
+        e.commit_content_jobs(prepared).unwrap();
+        assert_eq!(hits(&e, "original", "content", "").total, 12);
+        assert!(e.next_content_jobs_after(0, 128).unwrap().is_empty());
+    }
+
     #[test]
     fn opt_in_chinese_short_phrases_literal_symbols_and_scope_filtering() {
         let dir = tempfile::tempdir().unwrap();

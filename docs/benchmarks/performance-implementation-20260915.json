@@ -1,0 +1,729 @@
+{
+  "date": "2026-09-15",
+  "platform": "macOS-15.7.9-x86_64-i386-64bit",
+  "baseline": "temporary source snapshot before this performance pass, including prior progress fixes; not an unmodified release",
+  "method": "Release; isolated new temporary fixture/database per run; 2 repeats in reversed order; each metadata run has initial scan and 2 unchanged refreshes; real parser subprocesses; no concurrent compiler/benchmark; local warm cache; includes 200 ms request debounce and 25 ms status polling. No Windows hardware measurement.",
+  "runs": [
+    {
+      "content": true,
+      "directories": 101,
+      "files": 256,
+      "metadata_ms": 294.483295,
+      "note": "synthetic warm local fixtures; watch disabled; validates file count and content hits; not Windows acceptance",
+      "platform": "macos",
+      "scan_ms_including_debounce": [
+        291.87295
+      ],
+      "total_ms": 19934.323719999997,
+      "case": "content256",
+      "repeat": 0,
+      "version": "baseline",
+      "stages": [
+        {
+          "counting_ms": 31.066069000000002,
+          "directories": 101,
+          "elapsed_ms": 67,
+          "files": 256,
+          "finalize_ms": 1.881909,
+          "pipeline_ms": 34.49405,
+          "scopes": 1,
+          "write_ms": 8
+        }
+      ]
+    },
+    {
+      "content": true,
+      "directories": 101,
+      "files": 256,
+      "metadata_ms": 241.707372,
+      "note": "synthetic warm local fixtures; watch disabled; validates file count and content hits; not Windows acceptance",
+      "platform": "macos",
+      "scan_ms_including_debounce": [
+        239.77506100000002
+      ],
+      "total_ms": 827.848924,
+      "case": "content256",
+      "repeat": 0,
+      "version": "optimized",
+      "stages": [
+        {
+          "counting_ms": 5,
+          "directories": 101,
+          "elapsed_ms": 16,
+          "files": 256,
+          "finalize_ms": 1,
+          "pipeline_ms": 10,
+          "scopes": 1,
+          "write_ms": 5
+        }
+      ]
+    },
+    {
+      "content": true,
+      "directories": 101,
+      "files": 256,
+      "metadata_ms": 237.90130200000002,
+      "note": "synthetic warm local fixtures; watch disabled; validates file count and content hits; not Windows acceptance",
+      "platform": "macos",
+      "scan_ms_including_debounce": [
+        236.695507
+      ],
+      "total_ms": 765.28477,
+      "case": "content256",
+      "repeat": 1,
+      "version": "optimized",
+      "stages": [
+        {
+          "counting_ms": 4,
+          "directories": 101,
+          "elapsed_ms": 17,
+          "files": 256,
+          "finalize_ms": 0,
+          "pipeline_ms": 12,
+          "scopes": 1,
+          "write_ms": 7
+        }
+      ]
+    },
+    {
+      "content": true,
+      "directories": 101,
+      "files": 256,
+      "metadata_ms": 246.504467,
+      "note": "synthetic warm local fixtures; watch disabled; validates file count and content hits; not Windows acceptance",
+      "platform": "macos",
+      "scan_ms_including_debounce": [
+        244.90022
+      ],
+      "total_ms": 20200.104369,
+      "case": "content256",
+      "repeat": 1,
+      "version": "baseline",
+      "stages": [
+        {
+          "counting_ms": 3.4206119999999998,
+          "directories": 101,
+          "elapsed_ms": 15,
+          "files": 256,
+          "finalize_ms": 0.6708149999999999,
+          "pipeline_ms": 11.151296,
+          "scopes": 1,
+          "write_ms": 5
+        }
+      ]
+    },
+    {
+      "content": false,
+      "directories": 10001,
+      "files": 30000,
+      "metadata_ms": 6205.06532,
+      "note": "synthetic warm local fixtures; watch disabled; validates file count and content hits; not Windows acceptance",
+      "platform": "macos",
+      "scan_ms_including_debounce": [
+        2869.538668,
+        1708.372163,
+        1625.4692670000002
+      ],
+      "total_ms": 6205.093511,
+      "case": "directories10000",
+      "repeat": 0,
+      "version": "baseline",
+      "stages": [
+        {
+          "counting_ms": 791.9422569999999,
+          "directories": 10001,
+          "elapsed_ms": 2634,
+          "files": 30000,
+          "finalize_ms": 29.022158,
+          "pipeline_ms": 1813.7990360000001,
+          "scopes": 1,
+          "write_ms": 1247
+        },
+        {
+          "counting_ms": 416.672918,
+          "directories": 10001,
+          "elapsed_ms": 1455,
+          "files": 30000,
+          "finalize_ms": 31.244279,
+          "pipeline_ms": 1007.757008,
+          "scopes": 1,
+          "write_ms": 443
+        },
+        {
+          "counting_ms": 434.37931299999997,
+          "directories": 10001,
+          "elapsed_ms": 1391,
+          "files": 30000,
+          "finalize_ms": 26.496309999999998,
+          "pipeline_ms": 931.0438170000001,
+          "scopes": 1,
+          "write_ms": 389
+        }
+      ]
+    },
+    {
+      "content": false,
+      "directories": 10001,
+      "files": 30000,
+      "metadata_ms": 6073.020469,
+      "note": "synthetic warm local fixtures; watch disabled; validates file count and content hits; not Windows acceptance",
+      "platform": "macos",
+      "scan_ms_including_debounce": [
+        2724.361962,
+        1760.4688429999999,
+        1586.841915
+      ],
+      "total_ms": 6073.619675,
+      "case": "directories10000",
+      "repeat": 0,
+      "version": "optimized",
+      "stages": [
+        {
+          "counting_ms": 496,
+          "directories": 10001,
+          "elapsed_ms": 2520,
+          "files": 30000,
+          "finalize_ms": 48,
+          "pipeline_ms": 1976,
+          "scopes": 1,
+          "write_ms": 1437
+        },
+        {
+          "counting_ms": 502,
+          "directories": 10001,
+          "elapsed_ms": 1548,
+          "files": 30000,
+          "finalize_ms": 36,
+          "pipeline_ms": 1009,
+          "scopes": 1,
+          "write_ms": 473
+        },
+        {
+          "counting_ms": 430,
+          "directories": 10001,
+          "elapsed_ms": 1378,
+          "files": 30000,
+          "finalize_ms": 37,
+          "pipeline_ms": 911,
+          "scopes": 1,
+          "write_ms": 449
+        }
+      ]
+    },
+    {
+      "content": false,
+      "directories": 10001,
+      "files": 30000,
+      "metadata_ms": 5844.841845999999,
+      "note": "synthetic warm local fixtures; watch disabled; validates file count and content hits; not Windows acceptance",
+      "platform": "macos",
+      "scan_ms_including_debounce": [
+        2545.284102,
+        1644.919239,
+        1653.27
+      ],
+      "total_ms": 5844.874379,
+      "case": "directories10000",
+      "repeat": 1,
+      "version": "optimized",
+      "stages": [
+        {
+          "counting_ms": 509,
+          "directories": 10001,
+          "elapsed_ms": 2308,
+          "files": 30000,
+          "finalize_ms": 32,
+          "pipeline_ms": 1765,
+          "scopes": 1,
+          "write_ms": 1293
+        },
+        {
+          "counting_ms": 427,
+          "directories": 10001,
+          "elapsed_ms": 1414,
+          "files": 30000,
+          "finalize_ms": 29,
+          "pipeline_ms": 956,
+          "scopes": 1,
+          "write_ms": 438
+        },
+        {
+          "counting_ms": 447,
+          "directories": 10001,
+          "elapsed_ms": 1432,
+          "files": 30000,
+          "finalize_ms": 29,
+          "pipeline_ms": 955,
+          "scopes": 1,
+          "write_ms": 430
+        }
+      ]
+    },
+    {
+      "content": false,
+      "directories": 10001,
+      "files": 30000,
+      "metadata_ms": 5852.943736,
+      "note": "synthetic warm local fixtures; watch disabled; validates file count and content hits; not Windows acceptance",
+      "platform": "macos",
+      "scan_ms_including_debounce": [
+        2481.359061,
+        1576.094171,
+        1794.132243
+      ],
+      "total_ms": 5852.9697,
+      "case": "directories10000",
+      "repeat": 1,
+      "version": "baseline",
+      "stages": [
+        {
+          "counting_ms": 434.010966,
+          "directories": 10001,
+          "elapsed_ms": 2238,
+          "files": 30000,
+          "finalize_ms": 32.095029999999994,
+          "pipeline_ms": 1772.0986540000001,
+          "scopes": 1,
+          "write_ms": 1244
+        },
+        {
+          "counting_ms": 387.88176699999997,
+          "directories": 10001,
+          "elapsed_ms": 1333,
+          "files": 30000,
+          "finalize_ms": 34.449658,
+          "pipeline_ms": 911.5017429999999,
+          "scopes": 1,
+          "write_ms": 400
+        },
+        {
+          "counting_ms": 564.789487,
+          "directories": 10001,
+          "elapsed_ms": 1557,
+          "files": 30000,
+          "finalize_ms": 29.403253,
+          "pipeline_ms": 963.273287,
+          "scopes": 1,
+          "write_ms": 422
+        }
+      ]
+    },
+    {
+      "content": false,
+      "directories": 101,
+      "files": 30000,
+      "metadata_ms": 2244.002574,
+      "note": "synthetic warm local fixtures; watch disabled; validates file count and content hits; not Windows acceptance",
+      "platform": "macos",
+      "scan_ms_including_debounce": [
+        986.38635,
+        569.145294,
+        687.037614
+      ],
+      "total_ms": 2244.025378,
+      "case": "directories100",
+      "repeat": 0,
+      "version": "baseline",
+      "stages": [
+        {
+          "counting_ms": 32.39951,
+          "directories": 101,
+          "elapsed_ms": 743,
+          "files": 30000,
+          "finalize_ms": 36.814823000000004,
+          "pipeline_ms": 674.332364,
+          "scopes": 1,
+          "write_ms": 657
+        },
+        {
+          "counting_ms": 34.430344000000005,
+          "directories": 101,
+          "elapsed_ms": 336,
+          "files": 30000,
+          "finalize_ms": 21.104853,
+          "pipeline_ms": 280.579343,
+          "scopes": 1,
+          "write_ms": 264
+        },
+        {
+          "counting_ms": 35.458653,
+          "directories": 101,
+          "elapsed_ms": 408,
+          "files": 30000,
+          "finalize_ms": 52.660415,
+          "pipeline_ms": 320.052839,
+          "scopes": 1,
+          "write_ms": 303
+        }
+      ]
+    },
+    {
+      "content": false,
+      "directories": 101,
+      "files": 30000,
+      "metadata_ms": 2064.257188,
+      "note": "synthetic warm local fixtures; watch disabled; validates file count and content hits; not Windows acceptance",
+      "platform": "macos",
+      "scan_ms_including_debounce": [
+        896.3774500000001,
+        600.436849,
+        566.268261
+      ],
+      "total_ms": 2064.2898490000002,
+      "case": "directories100",
+      "repeat": 0,
+      "version": "optimized",
+      "stages": [
+        {
+          "counting_ms": 40,
+          "directories": 101,
+          "elapsed_ms": 645,
+          "files": 30000,
+          "finalize_ms": 31,
+          "pipeline_ms": 573,
+          "scopes": 1,
+          "write_ms": 508
+        },
+        {
+          "counting_ms": 36,
+          "directories": 101,
+          "elapsed_ms": 358,
+          "files": 30000,
+          "finalize_ms": 23,
+          "pipeline_ms": 298,
+          "scopes": 1,
+          "write_ms": 242
+        },
+        {
+          "counting_ms": 34,
+          "directories": 101,
+          "elapsed_ms": 351,
+          "files": 30000,
+          "finalize_ms": 27,
+          "pipeline_ms": 289,
+          "scopes": 1,
+          "write_ms": 237
+        }
+      ]
+    },
+    {
+      "content": false,
+      "directories": 101,
+      "files": 30000,
+      "metadata_ms": 2469.141133,
+      "note": "synthetic warm local fixtures; watch disabled; validates file count and content hits; not Windows acceptance",
+      "platform": "macos",
+      "scan_ms_including_debounce": [
+        1188.111619,
+        638.5908999999999,
+        641.213645
+      ],
+      "total_ms": 2469.1726909999998,
+      "case": "directories100",
+      "repeat": 1,
+      "version": "optimized",
+      "stages": [
+        {
+          "counting_ms": 36,
+          "directories": 101,
+          "elapsed_ms": 975,
+          "files": 30000,
+          "finalize_ms": 51,
+          "pipeline_ms": 887,
+          "scopes": 1,
+          "write_ms": 821
+        },
+        {
+          "counting_ms": 40,
+          "directories": 101,
+          "elapsed_ms": 404,
+          "files": 30000,
+          "finalize_ms": 20,
+          "pipeline_ms": 343,
+          "scopes": 1,
+          "write_ms": 272
+        },
+        {
+          "counting_ms": 38,
+          "directories": 101,
+          "elapsed_ms": 420,
+          "files": 30000,
+          "finalize_ms": 24,
+          "pipeline_ms": 357,
+          "scopes": 1,
+          "write_ms": 291
+        }
+      ]
+    },
+    {
+      "content": false,
+      "directories": 101,
+      "files": 30000,
+      "metadata_ms": 2272.063799,
+      "note": "synthetic warm local fixtures; watch disabled; validates file count and content hits; not Windows acceptance",
+      "platform": "macos",
+      "scan_ms_including_debounce": [
+        1000.0338339999998,
+        623.631157,
+        646.83114
+      ],
+      "total_ms": 2272.087171,
+      "case": "directories100",
+      "repeat": 1,
+      "version": "baseline",
+      "stages": [
+        {
+          "counting_ms": 36.627555,
+          "directories": 101,
+          "elapsed_ms": 773,
+          "files": 30000,
+          "finalize_ms": 34.171131,
+          "pipeline_ms": 702.510478,
+          "scopes": 1,
+          "write_ms": 687
+        },
+        {
+          "counting_ms": 37.937748,
+          "directories": 101,
+          "elapsed_ms": 369,
+          "files": 30000,
+          "finalize_ms": 29.268919,
+          "pipeline_ms": 302.623957,
+          "scopes": 1,
+          "write_ms": 288
+        },
+        {
+          "counting_ms": 38.247408,
+          "directories": 101,
+          "elapsed_ms": 401,
+          "files": 30000,
+          "finalize_ms": 21.407327,
+          "pipeline_ms": 341.817019,
+          "scopes": 1,
+          "write_ms": 326
+        }
+      ]
+    },
+    {
+      "content": false,
+      "directories": 2,
+      "files": 30000,
+      "metadata_ms": 2565.923438,
+      "note": "synthetic warm local fixtures; watch disabled; validates file count and content hits; not Windows acceptance",
+      "platform": "macos",
+      "scan_ms_including_debounce": [
+        1194.372327,
+        723.895728,
+        646.272092
+      ],
+      "total_ms": 2565.9479699999997,
+      "case": "flat",
+      "repeat": 0,
+      "version": "baseline",
+      "stages": [
+        {
+          "counting_ms": 95.27470100000001,
+          "directories": 2,
+          "elapsed_ms": 935,
+          "files": 30000,
+          "finalize_ms": 28.998801,
+          "pipeline_ms": 811.116477,
+          "scopes": 1,
+          "write_ms": 797
+        },
+        {
+          "counting_ms": 86.787161,
+          "directories": 2,
+          "elapsed_ms": 483,
+          "files": 30000,
+          "finalize_ms": 21.638869000000003,
+          "pipeline_ms": 375.50180900000004,
+          "scopes": 1,
+          "write_ms": 362
+        },
+        {
+          "counting_ms": 86.790089,
+          "directories": 2,
+          "elapsed_ms": 411,
+          "files": 30000,
+          "finalize_ms": 20.761188,
+          "pipeline_ms": 303.46054300000003,
+          "scopes": 1,
+          "write_ms": 289
+        }
+      ]
+    },
+    {
+      "content": false,
+      "directories": 2,
+      "files": 30000,
+      "metadata_ms": 2402.398699,
+      "note": "synthetic warm local fixtures; watch disabled; validates file count and content hits; not Windows acceptance",
+      "platform": "macos",
+      "scan_ms_including_debounce": [
+        1005.793961,
+        693.394856,
+        701.874822
+      ],
+      "total_ms": 2403.2519780000002,
+      "case": "flat",
+      "repeat": 0,
+      "version": "optimized",
+      "stages": [
+        {
+          "counting_ms": 105,
+          "directories": 2,
+          "elapsed_ms": 769,
+          "files": 30000,
+          "finalize_ms": 20,
+          "pipeline_ms": 643,
+          "scopes": 1,
+          "write_ms": 613
+        },
+        {
+          "counting_ms": 90,
+          "directories": 2,
+          "elapsed_ms": 441,
+          "files": 30000,
+          "finalize_ms": 25,
+          "pipeline_ms": 325,
+          "scopes": 1,
+          "write_ms": 290
+        },
+        {
+          "counting_ms": 104,
+          "directories": 2,
+          "elapsed_ms": 456,
+          "files": 30000,
+          "finalize_ms": 25,
+          "pipeline_ms": 327,
+          "scopes": 1,
+          "write_ms": 292
+        }
+      ]
+    },
+    {
+      "content": false,
+      "directories": 2,
+      "files": 30000,
+      "metadata_ms": 2547.7216350000003,
+      "note": "synthetic warm local fixtures; watch disabled; validates file count and content hits; not Windows acceptance",
+      "platform": "macos",
+      "scan_ms_including_debounce": [
+        954.3345250000001,
+        733.800561,
+        858.1877949999999
+      ],
+      "total_ms": 2547.7599509999995,
+      "case": "flat",
+      "repeat": 1,
+      "version": "optimized",
+      "stages": [
+        {
+          "counting_ms": 87,
+          "directories": 2,
+          "elapsed_ms": 713,
+          "files": 30000,
+          "finalize_ms": 24,
+          "pipeline_ms": 600,
+          "scopes": 1,
+          "write_ms": 576
+        },
+        {
+          "counting_ms": 98,
+          "directories": 2,
+          "elapsed_ms": 458,
+          "files": 30000,
+          "finalize_ms": 32,
+          "pipeline_ms": 326,
+          "scopes": 1,
+          "write_ms": 295
+        },
+        {
+          "counting_ms": 137,
+          "directories": 2,
+          "elapsed_ms": 610,
+          "files": 30000,
+          "finalize_ms": 25,
+          "pipeline_ms": 447,
+          "scopes": 1,
+          "write_ms": 403
+        }
+      ]
+    },
+    {
+      "content": false,
+      "directories": 2,
+      "files": 30000,
+      "metadata_ms": 2786.4251700000004,
+      "note": "synthetic warm local fixtures; watch disabled; validates file count and content hits; not Windows acceptance",
+      "platform": "macos",
+      "scan_ms_including_debounce": [
+        1219.034415,
+        741.435753,
+        824.218174
+      ],
+      "total_ms": 2786.460902,
+      "case": "flat",
+      "repeat": 1,
+      "version": "baseline",
+      "stages": [
+        {
+          "counting_ms": 90.986817,
+          "directories": 2,
+          "elapsed_ms": 980,
+          "files": 30000,
+          "finalize_ms": 24.846545000000003,
+          "pipeline_ms": 864.871833,
+          "scopes": 1,
+          "write_ms": 852
+        },
+        {
+          "counting_ms": 118.530148,
+          "directories": 2,
+          "elapsed_ms": 516,
+          "files": 30000,
+          "finalize_ms": 25.566284000000003,
+          "pipeline_ms": 372.803361,
+          "scopes": 1,
+          "write_ms": 358
+        },
+        {
+          "counting_ms": 105.16418499999999,
+          "directories": 2,
+          "elapsed_ms": 557,
+          "files": 30000,
+          "finalize_ms": 46.773659,
+          "pipeline_ms": 405.325648,
+          "scopes": 1,
+          "write_ms": 386
+        }
+      ]
+    }
+  ],
+  "binaries_sha256": {
+    "baseline": "23abeb41c73dde58f95ac6eac76cb44735d69f05ce48a1f3fb826242c52228d3",
+    "optimized": "7e3bf997f3deab912975fa43f5dfebaac977f641ce4f356e5576ac4172c231f8"
+  },
+  "optimized_source_sha256": {
+    "crates/filem-core/src/windows_shell.rs": "7731dd7d2f9e46635b093a53bca7344c8380d700c92bca73f6c468c1728ffcda",
+    "crates/filem-core/src/everything.rs": "ccc2a4f576f31d2c6de26960dff47714e2acda93b3b42c981f17a81ef24d9a59",
+    "crates/filem-core/src/rules.rs": "7ff9db51c6041f81f31b27c851030f20bbb99d77124ca042b7eb9c80cf4938be",
+    "crates/filem-core/src/moving.rs": "761c809ae2b4a667e0d465ce90dd9ce0a1d946cfa442b65ec61458008d3231ae",
+    "crates/filem-core/src/lib.rs": "e1255eb0637290322ed4d163fa38741b347a10262d32cc2bd55ef808e3fdd223",
+    "crates/filem-core/src/scan_gate.rs": "35b3d3d53cfb9a116a21cd642c09874a327356fccee3634788e6019325349d0d",
+    "crates/filem-core/src/scan_schedule.rs": "6ec70cda3a152c5be297386100655f2e7452832b87f6f66a249329c4987ececc",
+    "crates/filem-core/src/scan_progress.rs": "cec55cb0e12c89d1eb24f3a9247f79a134ba5104da31b5655de4a25dab166e62",
+    "crates/filem-core/src/db.rs": "bcb2e36d3d8bfa6e1161eff1b8d78a959506c5c9d590bdbd39b3a489053a2357",
+    "crates/filem-core/src/extract.rs": "876db87e653c6b3cee33cd7f50f0084b464cc2529b57594d789a004678d980af",
+    "crates/filem-core/src/scan_tests.rs": "a4f490e628422373f7e160155e23c4b9953e07b316eac6c57d5b82522f7225f6",
+    "crates/filem-core/src/watch.rs": "9bf488f58284f4b3feec52391be85e32998f356ded58fc003cfe123eba565f91",
+    "crates/filem-core/src/performance.rs": "37775a4569e3ce75484b92445f68459621ec0620dc91c279b8a114969a741052",
+    "crates/filem-core/src/deletion.rs": "937c28fa397ad8e6067bd7958f1669edb48180459b71ccf269abe20db06fa3d0",
+    "crates/filem-core/src/scan.rs": "ff3765da9f54a0eae0d2a1bf53ff93025900d5986cc44f2163c46056a0d736c4",
+    "crates/filem-core/src/scan_entry.rs": "c578b71c39c4d6669121918344718830334f9f56e9e41b00ac595fa502bdff15",
+    "crates/filem-core/src/model.rs": "31410c8ad07b36b6d3f28afe1956929f775c79d2a8ee33701dd59932fc836277",
+    "crates/filem-core/src/platform.rs": "30059e6c238c7f0bc20934285fe460ea1a3b6565a81986659286d6e6d2d0875c",
+    "crates/filem-core/src/content.rs": "a3fed43238c5798828c000fcdb2b34476f72d069d38cda2c619098e8f9baed96"
+  }
+}

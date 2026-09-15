@@ -320,101 +320,182 @@ struct Reply {
     output: Option<Extracted>,
     error: Option<String>,
 }
+fn read_frame(reader: &mut impl Read, limit: usize) -> Result<Vec<u8>> {
+    let mut size = [0u8; 4];
+    reader.read_exact(&mut size)?;
+    let size = u32::from_le_bytes(size) as usize;
+    if size > limit {
+        bail!("解析消息超过限制");
+    }
+    let mut bytes = vec![0; size];
+    reader.read_exact(&mut bytes)?;
+    Ok(bytes)
+}
+fn write_frame(writer: &mut impl std::io::Write, bytes: &[u8]) -> Result<()> {
+    writer.write_all(&(bytes.len() as u32).to_le_bytes())?;
+    writer.write_all(bytes)?;
+    writer.flush()?;
+    Ok(())
+}
 pub(crate) fn run_helper_if_requested() -> bool {
-    if std::env::args().nth(1).as_deref() != Some("--filem-content-helper") {
+    let flag = std::env::args().nth(1);
+    let stream = flag.as_deref() == Some("--filem-content-helper-stream");
+    if !stream && flag.as_deref() != Some("--filem-content-helper") {
         return false;
     }
-    let result = (|| -> Result<Extracted> {
+    let run = || -> Result<()> {
+        // Persistent helpers have per-request wall deadlines in the parent;
+        // a cumulative CPU limit would incorrectly kill later healthy requests.
         #[cfg(windows)]
         let _resources = limit_resources()?;
         #[cfg(unix)]
-        limit_resources()?;
-        let request: Request = serde_json::from_reader(std::io::stdin().take(1024 * 1024))?;
-        extract_file(&request)
-    })();
-    let reply = match result {
-        Ok(output) => Reply {
-            output: Some(output),
-            error: None,
-        },
-        Err(e) => Reply {
-            output: None,
-            error: Some(format!("{e:#}")),
-        },
+        limit_resources(!stream)?;
+        let mut input = std::io::stdin().lock();
+        let mut output = std::io::stdout().lock();
+        loop {
+            let request: Request = if stream {
+                match read_frame(&mut input, 1024 * 1024) {
+                    Ok(bytes) => serde_json::from_slice(&bytes)?,
+                    Err(_) => return Ok(()),
+                }
+            } else {
+                serde_json::from_reader((&mut input).take(1024 * 1024))?
+            };
+            let reply = match extract_file(&request) {
+                Ok(output) => Reply {
+                    output: Some(output),
+                    error: None,
+                },
+                Err(error) => Reply {
+                    output: None,
+                    error: Some(format!("{error:#}")),
+                },
+            };
+            if stream {
+                write_frame(&mut output, &serde_json::to_vec(&reply)?)?;
+            } else {
+                serde_json::to_writer(&mut output, &reply)?;
+                return Ok(());
+            }
+        }
     };
-    let _ = serde_json::to_writer(std::io::stdout().lock(), &reply);
+    let _ = run();
     true
 }
 #[cfg(not(test))]
-pub(crate) fn isolated(request: &Request, valid: impl Fn() -> bool) -> Result<Extracted> {
-    use std::{
-        io::Write,
-        process::{Command, Stdio},
-        time::{Duration, Instant},
-    };
-    struct Child(std::process::Child);
-    impl Drop for Child {
-        fn drop(&mut self) {
-            let _ = self.0.kill();
-            let _ = self.0.wait();
-        }
-    }
-    let mut command = Command::new(std::env::current_exe()?);
-    command
-        .arg("--filem-content-helper")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000);
-    }
-    let mut child = Child(command.spawn()?);
-    let mut input = child.0.stdin.take().context("内容提取输入不可用")?;
-    serde_json::to_writer(&mut input, request)?;
-    input.flush()?;
-    drop(input);
-    let output = child.0.stdout.take().context("内容提取输出不可用")?;
-    let reader = std::thread::spawn(move || -> std::io::Result<Vec<u8>> {
-        let mut bytes = Vec::new();
-        output
-            .take((MAX_TEXT * 6 + 8192) as u64)
-            .read_to_end(&mut bytes)?;
-        Ok(bytes)
-    });
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        if let Some(exit) = child.0.try_wait()? {
-            if !exit.success() {
-                bail!("文档解析进程异常退出，已跳过此文件");
-            }
-            break;
-        }
-        let memory_exceeded = parser_memory_exceeded(child.0.id());
-        if Instant::now() > deadline || memory_exceeded || !valid() {
-            let _ = child.0.kill();
-            let _ = child.0.wait();
+struct Parser {
+    child: std::process::Child,
+    input: std::process::ChildStdin,
+    replies: Option<std::sync::mpsc::Receiver<Result<Vec<u8>>>>,
+    reader: Option<std::thread::JoinHandle<()>>,
+    used: usize,
+}
+#[cfg(not(test))]
+impl Drop for Parser {
+    fn drop(&mut self) {
+        self.replies.take();
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        if let Some(reader) = self.reader.take() {
             let _ = reader.join();
-            bail!(if memory_exceeded {
-                "解析内存超过 512 MiB，已停止此文件"
-            } else {
-                "内容提取已停止或超过 30 秒限制"
-            });
         }
-        std::thread::sleep(Duration::from_millis(50));
     }
-    let bytes = reader
-        .join()
-        .map_err(|_| anyhow::anyhow!("文档输出线程退出"))??;
-    let reply: Reply = serde_json::from_slice(&bytes).context("文档解析结果无效")?;
-    let result = reply
-        .output
-        .context(reply.error.unwrap_or_else(|| "文档解析失败".into()))?;
-    if result.text.len() > MAX_TEXT {
-        bail!("文档解析结果过长");
+}
+#[cfg(not(test))]
+impl Parser {
+    fn spawn() -> Result<Self> {
+        use std::process::{Command, Stdio};
+        let mut command = Command::new(std::env::current_exe()?);
+        command
+            .arg("--filem-content-helper-stream")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000);
+        }
+        let mut child = command.spawn()?;
+        let input = child.stdin.take().context("解析输入不可用")?;
+        let mut output = child.stdout.take().context("解析输出不可用")?;
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let reader = std::thread::spawn(move || loop {
+            let frame = read_frame(&mut output, MAX_TEXT * 6 + 8192);
+            let failed = frame.is_err();
+            if sender.send(frame).is_err() || failed {
+                break;
+            }
+        });
+        Ok(Self {
+            child,
+            input,
+            replies: Some(receiver),
+            reader: Some(reader),
+            used: 0,
+        })
     }
-    Ok(result)
+    fn extract(&mut self, request: &Request, valid: impl Fn() -> bool) -> Result<Extracted> {
+        use std::{
+            sync::mpsc::RecvTimeoutError,
+            time::{Duration, Instant},
+        };
+        if !valid() {
+            bail!("内容提取已停止");
+        }
+        write_frame(&mut self.input, &serde_json::to_vec(request)?)?;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let bytes = loop {
+            // Replies wake immediately; the timeout only checks cancellation and
+            // memory, so small documents no longer wait in 50-ms polling steps.
+            match self
+                .replies
+                .as_ref()
+                .unwrap()
+                .recv_timeout(Duration::from_millis(50))
+            {
+                Ok(reply) => break reply?,
+                Err(RecvTimeoutError::Disconnected) => bail!("文档解析进程异常退出"),
+                Err(RecvTimeoutError::Timeout) => {}
+            }
+            if Instant::now() >= deadline || !valid() {
+                bail!("内容提取已停止或超过 30 秒限制");
+            }
+            if parser_memory_exceeded(self.child.id()) {
+                bail!("解析内存超过 512 MiB");
+            }
+        };
+        if parser_memory_exceeded(self.child.id()) {
+            bail!("解析内存超过 512 MiB");
+        }
+        let reply: Reply = serde_json::from_slice(&bytes).context("文档解析结果无效")?;
+        let result = reply
+            .output
+            .context(reply.error.unwrap_or_else(|| "文档解析失败".into()))?;
+        if result.text.len() > MAX_TEXT {
+            bail!("文档解析结果过长");
+        }
+        self.used += 1;
+        Ok(result)
+    }
+}
+#[cfg(not(test))]
+pub(crate) fn isolated(request: &Request, valid: impl Fn() -> bool) -> Result<Extracted> {
+    thread_local! { static PARSER: std::cell::RefCell<Option<Parser>> = const { std::cell::RefCell::new(None) }; }
+    PARSER.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot.as_ref().is_some_and(|p| p.used >= 64) {
+            slot.take();
+        }
+        if slot.is_none() {
+            *slot = Some(Parser::spawn()?);
+        }
+        let result = slot.as_mut().unwrap().extract(request, valid);
+        if result.is_err() {
+            slot.take();
+        }
+        result
+    })
 }
 #[cfg(test)]
 pub(crate) fn isolated(request: &Request, valid: impl Fn() -> bool) -> Result<Extracted> {
@@ -425,7 +506,7 @@ pub(crate) fn isolated(request: &Request, valid: impl Fn() -> bool) -> Result<Ex
 }
 
 #[cfg(unix)]
-fn limit_resources() -> Result<()> {
+fn limit_resources(limit_cpu: bool) -> Result<()> {
     // macOS may already impose a lower hard data limit. Never raise inherited limits.
     unsafe {
         #[cfg(target_os = "macos")]
@@ -436,6 +517,9 @@ fn limit_resources() -> Result<()> {
             (libc::RLIMIT_CPU, 30),
         ];
         for (resource, limit) in limits {
+            if resource == libc::RLIMIT_CPU && !limit_cpu {
+                continue;
+            }
             let mut current: libc::rlimit = std::mem::zeroed();
             if libc::getrlimit(resource, &mut current) != 0 {
                 return Err(std::io::Error::last_os_error()).context("无法读取解析资源限制");

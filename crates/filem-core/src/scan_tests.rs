@@ -301,6 +301,8 @@ fn cancelled_completion_cannot_delete_old_membership_or_mark_current() {
         &f.engine,
         &scope.0,
         Completion {
+            limits: None,
+            defer_cleanup: false,
             version,
             generation: "cancelled",
             failed: &[],
@@ -475,4 +477,158 @@ fn pause_replays_inflight_wave_without_resurrecting_deleted_files() {
     assert_eq!(f.names(&target.0).len(), 2999);
     assert!(!f.names(&target.0).iter().any(|n| n == "file-0.txt"));
     assert_eq!(f.engine.summary().unwrap().scopes[0].scanned, 2999);
+}
+
+#[test]
+fn refresh_all_publishes_every_root_before_the_first_worker_claims_it() {
+    let f = Fixture::new();
+    f.file("left/deep/a.txt");
+    f.file("right/inner/b.txt");
+    let left = f.scope("left", true, &[]);
+    let right = f.scope("right", true, &[]);
+    *left.1.pending.lock().unwrap() = Default::default();
+    *right.1.pending.lock().unwrap() = Default::default();
+    db::bump(&f.engine.lock().unwrap()).unwrap();
+    f.engine.dispatch("refresh", serde_json::json!({})).unwrap();
+    assert!(left.1.pending.lock().unwrap().full);
+    assert!(right.1.pending.lock().unwrap().full);
+    f.engine.scan_pending(&left.0, &left.1).unwrap();
+    let summary = f.engine.summary().unwrap();
+    assert_eq!(summary.scan_runs.len(), 1);
+    let batch = &summary.scan_runs[0];
+    assert_eq!(batch.scope_ids.len(), 2);
+    assert_eq!(batch.total_directories, Some(4));
+    assert_eq!(batch.processed_directories, 4);
+    assert_eq!(batch.phase, "complete");
+    // The other worker's wakeup must not repeat the same batch.
+    f.engine.scan_pending(&right.0, &right.1).unwrap();
+    assert_eq!(f.engine.summary().unwrap().scan_runs[0].round, batch.round);
+}
+
+#[test]
+fn folders_added_during_a_batch_wait_and_share_the_next_fixed_plan() {
+    let f = Fixture::new();
+    f.file("first/a.txt");
+    f.file("second/deep/b.txt");
+    f.file("third/deeper/nested/c.txt");
+    let first = f.scope("first", true, &[]);
+    let pause = f.engine.inner.scan_gate.pause();
+    let engine = f.engine.clone();
+    let target = first.clone();
+    let first_worker = thread::spawn(move || engine.scan_pending(&target.0, &target.1).unwrap());
+    let start = std::time::Instant::now();
+    while first.1.progress.lock().unwrap().is_none() {
+        assert!(start.elapsed() < Duration::from_secs(5));
+        thread::yield_now();
+    }
+    let first_round = f.engine.summary().unwrap().scan_runs[0].round;
+    let second = f.scope("second", true, &[]);
+    let engine = f.engine.clone();
+    let target = second.clone();
+    let (sender, receiver) = mpsc::channel();
+    let second_worker = thread::spawn(move || {
+        engine.scan_pending(&target.0, &target.1).unwrap();
+        sender.send(()).unwrap();
+    });
+    assert!(receiver.recv_timeout(Duration::from_millis(100)).is_err());
+    let third = f.scope("third", true, &[]);
+    let snapshot = f.engine.summary().unwrap();
+    assert_eq!(snapshot.scan_runs.len(), 1);
+    assert_eq!(snapshot.scan_runs[0].scope_ids, vec![first.0.clone()]);
+    drop(pause);
+    first_worker.join().unwrap();
+    receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+    second_worker.join().unwrap();
+    let summary = f.engine.summary().unwrap();
+    assert_eq!(summary.total, 3);
+    assert_eq!(summary.scan_runs.len(), 1);
+    let next = &summary.scan_runs[0];
+    assert_eq!(next.round, first_round + 1);
+    assert_eq!(next.scope_ids.len(), 2);
+    assert!(next.scope_ids.contains(&second.0));
+    assert!(next.scope_ids.contains(&third.0));
+    assert_eq!(next.total_directories, Some(5));
+    assert_eq!(next.processed_directories, 5);
+    assert_eq!(next.phase, "complete");
+}
+
+#[test]
+fn subtree_events_preserve_unrelated_generations() {
+    let f = Fixture::new();
+    f.file("changed/old.txt");
+    f.file("unrelated/keep.txt");
+    let target = f.scope("", true, &[]);
+    run(&f.engine, &target.0, &target.1).unwrap();
+    let before:String=f.engine.lock().unwrap().query_row("SELECT generation FROM memberships m JOIN entries e ON e.id=m.entry_id WHERE name='keep.txt'",[],|r|r.get(0)).unwrap();
+    // This unrelated edit deliberately has no event: a subtree reconciliation
+    // must not observe it by traversing the rest of the scope.
+    fs::write(
+        f.root.join("unrelated/keep.txt"),
+        "unrelated replacement content",
+    )
+    .unwrap();
+    fs::remove_file(f.root.join("changed/old.txt")).unwrap();
+    f.file("changed/new/deep.txt");
+    assert!(update_files(
+        &f.engine,
+        &target.0,
+        &target.1,
+        &[f.root.join("changed"), f.root.join("changed/new")]
+    )
+    .unwrap());
+    let after:String=f.engine.lock().unwrap().query_row("SELECT generation FROM memberships m JOIN entries e ON e.id=m.entry_id WHERE name='keep.txt'",[],|r|r.get(0)).unwrap();
+    assert_eq!(before, after);
+    assert_eq!(f.names(&target.0), ["deep.txt", "keep.txt"]);
+    let telemetry = f.engine.summary().unwrap().scan_runs.remove(0);
+    assert_eq!(telemetry.total_directories, Some(2));
+    assert_eq!(telemetry.checked_files, 1);
+}
+
+#[test]
+fn replacing_a_directory_with_a_file_removes_only_its_old_descendants() {
+    let f = Fixture::new();
+    f.file("folder/deep/old.txt");
+    f.file("keep.txt");
+    let target = f.scope("", true, &[]);
+    run(&f.engine, &target.0, &target.1).unwrap();
+    fs::remove_dir_all(f.root.join("folder")).unwrap();
+    f.file("folder");
+    assert!(update_files(&f.engine, &target.0, &target.1, &[f.root.join("folder")]).unwrap());
+    assert_eq!(f.names(&target.0), ["folder", "keep.txt"]);
+}
+
+#[test]
+fn replacing_a_file_with_a_directory_removes_its_old_file_record() {
+    let f = Fixture::new();
+    f.file("folder");
+    f.file("keep.txt");
+    let target = f.scope("", true, &[]);
+    run(&f.engine, &target.0, &target.1).unwrap();
+    fs::remove_file(f.root.join("folder")).unwrap();
+    f.file("folder/new.txt");
+    assert!(update_files(&f.engine, &target.0, &target.1, &[f.root.join("folder")]).unwrap());
+    assert_eq!(f.names(&target.0), ["keep.txt", "new.txt"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn subtree_events_cannot_follow_a_symlink_in_an_ancestor() {
+    let f = Fixture::new();
+    f.file("folder/deep/old.txt");
+    let target = f.scope("", true, &[]);
+    run(&f.engine, &target.0, &target.1).unwrap();
+    let external = tempfile::tempdir().unwrap();
+    fs::create_dir(external.path().join("deep")).unwrap();
+    fs::write(external.path().join("deep/outside.txt"), "outside").unwrap();
+    fs::remove_dir_all(f.root.join("folder")).unwrap();
+    std::os::unix::fs::symlink(external.path(), f.root.join("folder")).unwrap();
+    assert!(update_files(
+        &f.engine,
+        &target.0,
+        &target.1,
+        &[f.root.join("folder/deep")]
+    )
+    .unwrap());
+    assert_eq!(f.names(&target.0), ["old.txt"]);
+    assert_eq!(f.engine.summary().unwrap().scopes[0].freshness, "partial");
 }
