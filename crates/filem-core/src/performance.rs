@@ -1,6 +1,5 @@
 use crate::Engine;
-use anyhow::{bail, Result};
-use rusqlite::OptionalExtension;
+use anyhow::Result;
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -12,44 +11,20 @@ pub struct Performance {
     pub content_threads: usize,
 }
 impl Performance {
-    fn resolve(mode: &str) -> Result<Self> {
+    fn fast() -> Self {
         let available = std::thread::available_parallelism().map_or(4, usize::from);
-        let (scan_threads, content_threads) = match mode {
-            "auto" => (available.clamp(1, 4), available.clamp(1, 2)),
-            "low" => (1, 1),
-            "balanced" => (4, 2),
-            "fast" => (available.clamp(4, 16), available.clamp(2, 4)),
-            _ => bail!("未知扫描性能模式"),
-        };
-        Ok(Self {
-            mode: mode.into(),
-            scan_threads,
-            content_threads,
-        })
+        Self {
+            mode: "fast".into(),
+            scan_threads: available.clamp(4, 16),
+            content_threads: available.clamp(2, 4),
+        }
     }
 }
 impl Engine {
     pub fn performance(&self) -> Result<Performance> {
-        let c = self.inner.content_db.lock().unwrap();
-        let mode: Option<String> = c
-            .query_row(
-                "SELECT value FROM settings WHERE key='performance'",
-                [],
-                |r| r.get(0),
-            )
-            .optional()?;
-        Performance::resolve(mode.as_deref().unwrap_or("auto"))
-    }
-    pub fn set_performance(&self, mode: &str) -> Result<Performance> {
-        let setting = Performance::resolve(mode)?;
-        let pool = Arc::new(
-            rayon::ThreadPoolBuilder::new()
-                .num_threads(setting.scan_threads)
-                .build()?,
-        );
-        self.lock()?.execute("INSERT INTO settings(key,value) VALUES('performance',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[mode])?;
-        *self.inner.pool.lock().unwrap() = pool;
-        Ok(setting)
+        // All scans use the same high-performance limits, including databases
+        // that still contain a performance preference from an older version.
+        Ok(Performance::fast())
     }
     pub(crate) fn configure_performance(&self) -> Result<()> {
         let setting = self.performance()?;
@@ -65,19 +40,34 @@ impl Engine {
 mod tests {
     use super::*;
     #[test]
-    fn settings_persist_and_invalid_modes_do_not_change_them() {
+    fn new_and_existing_indexes_always_use_high_performance() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("index.sqlite");
         let e = Engine::open(&path).unwrap();
-        assert_eq!(e.set_performance("low").unwrap().scan_threads, 1);
-        assert!(e.set_performance("unknown").is_err());
-        assert_eq!(e.performance().unwrap().mode, "low");
+        let setting = e.performance().unwrap();
+        assert_eq!(setting.mode, "fast");
+        assert!((4..=16).contains(&setting.scan_threads));
+        assert!((2..=4).contains(&setting.content_threads));
+        assert_eq!(
+            e.inner.pool.lock().unwrap().current_num_threads(),
+            setting.scan_threads
+        );
+        e.lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO settings(key,value) VALUES('performance','low')",
+                [],
+            )
+            .unwrap();
         drop(e);
         let e = Engine::open(path).unwrap();
-        assert_eq!(e.inner.pool.lock().unwrap().current_num_threads(), 1);
-        let old = e.inner.pool.lock().unwrap().clone();
-        assert_eq!(e.set_performance("balanced").unwrap().scan_threads, 4);
-        assert_eq!(old.current_num_threads(), 1);
-        assert_eq!(e.inner.pool.lock().unwrap().current_num_threads(), 4);
+        assert_eq!(e.performance().unwrap().mode, "fast");
+        assert_eq!(
+            e.inner.pool.lock().unwrap().current_num_threads(),
+            setting.scan_threads
+        );
+        assert!(e
+            .dispatch("set_performance", serde_json::json!({"mode":"low"}))
+            .is_err());
     }
 }

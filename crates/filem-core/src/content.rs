@@ -75,7 +75,11 @@ pub(crate) fn migrate(c: &Connection) -> Result<()> {
             DELETE FROM content_items WHERE NOT EXISTS (SELECT 1 FROM memberships m JOIN scopes s ON s.id=m.scope_id WHERE m.entry_id=content_items.entry_id AND s.content_enabled=1); END;
           CREATE TRIGGER IF NOT EXISTS content_scope_disabled AFTER UPDATE OF content_enabled ON scopes WHEN new.content_enabled=0 BEGIN
             DELETE FROM content_items WHERE NOT EXISTS (SELECT 1 FROM memberships m JOIN scopes s ON s.id=m.scope_id WHERE m.entry_id=content_items.entry_id AND s.content_enabled=1); END;
-          PRAGMA user_version=4;")?;
+          ")?;
+        let version: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if version < 4 {
+            c.execute_batch("PRAGMA user_version=4;")?;
+        }
         Ok(())
     })();
     match result {
@@ -618,6 +622,36 @@ mod tests {
             0
         );
     }
+
+    #[test]
+    fn directory_hiding_filters_content_and_combined_search() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("files");
+        fs::create_dir_all(root.join("hidden")).unwrap();
+        fs::write(root.join("hidden/合同.txt"), "保密项目 alpha").unwrap();
+        fs::write(root.join("visible.txt"), "保密项目 alpha").unwrap();
+        let e = Engine::open(dir.path().join("db/index.sqlite")).unwrap();
+        let scope = e.add_scope(input(&root, true)).unwrap();
+        index(&e);
+        e.hide_directory(&root.join("hidden")).unwrap();
+        for mode in ["content", "all"] {
+            assert_eq!(hits(&e, "保密项目", mode, &scope).total, 1);
+            let result = e
+                .query(&Query {
+                    search: "alpha".into(),
+                    search_mode: mode.into(),
+                    hidden: true,
+                    ..Default::default()
+                })
+                .unwrap();
+            assert_eq!(result.total, 1);
+            assert_eq!(result.entries[0].name, "合同.txt");
+            assert!(result.entries[0].snippet.is_some());
+        }
+        let rule = e.summary().unwrap().hidden_directories.remove(0);
+        e.restore_directory(&rule.id).unwrap();
+        assert_eq!(hits(&e, "保密项目", "content", &scope).total, 2);
+    }
     #[test]
     fn edits_moves_rebuilds_and_removal_do_not_leave_stale_fts_hits() {
         let dir = tempfile::tempdir().unwrap();
@@ -730,7 +764,7 @@ mod tests {
         assert_eq!(
             c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
-            4
+            5
         );
         c.execute(
             "INSERT INTO content_fts(content_fts) VALUES('integrity-check')",

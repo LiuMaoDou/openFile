@@ -6,6 +6,7 @@ export interface ScopeInput {
   excludes: string[];
 }
 export interface Scope extends ScopeInput {
+  scanIssueCount: number;
   progress?: {
     phase: "counting" | "scanning" | "indexing" | "finalizing";
     processedDirectories: number;
@@ -23,6 +24,16 @@ export interface Scope extends ScopeInput {
   lastScan: number | null;
   message: string | null;
 }
+export interface ScanIssuePage {
+  items: {
+    path: string;
+    kind: "file" | "directory" | "path";
+    reason: string;
+  }[];
+  total: number;
+  offset: number;
+  limit: number;
+}
 export interface Snippet {
   before: string;
   matched: string;
@@ -35,6 +46,7 @@ export interface Entry {
   id: string;
   name: string;
   directory: string;
+  directoryPath: string;
   path: string;
   extension: string;
   group: string;
@@ -44,6 +56,7 @@ export interface Entry {
   scopeName: string;
   online: boolean;
   hidden: boolean;
+  directoryHidden: boolean;
   placeholder: boolean;
 }
 export interface Bucket {
@@ -51,6 +64,7 @@ export interface Bucket {
   count: number;
 }
 export interface Summary {
+  hiddenDirectories: HiddenDirectory[];
   scanRuns: ScanRun[];
   facetScopeId: string;
   facetHidden: boolean;
@@ -63,6 +77,10 @@ export interface Summary {
   hiddenExtensions: Bucket[];
   groups: Bucket[];
   revision: number;
+}
+export interface HiddenDirectory {
+  id: string;
+  path: string;
 }
 export interface ScanRun {
   round: number;
@@ -153,6 +171,7 @@ export const DEFAULT_EXCLUDES = [
   "*.tmp",
 ];
 export const EMPTY_SUMMARY: Summary = {
+  hiddenDirectories: [],
   scanRuns: [],
   facetScopeId: "",
   facetHidden: false,

@@ -322,8 +322,12 @@ impl Engine {
             let parent = target.parent().context("目标缺少父目录")?;
             let name = target.file_name().context("目标文件名无效")?;
             tx.execute(
-                "INSERT OR IGNORE INTO directories(path,display) VALUES(?,?)",
-                params![encode(parent.as_os_str()), display_path(parent)],
+                "INSERT OR IGNORE INTO directories(path,display,hidden) VALUES(?,?,?)",
+                params![
+                    encode(parent.as_os_str()),
+                    display_path(parent),
+                    crate::hidden::contains(&crate::hidden::roots(&tx)?, parent)
+                ],
             )?;
             let dir: i64 = tx.query_row(
                 "SELECT id FROM directories WHERE path=?",

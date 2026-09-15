@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   CheckCircle2,
   ChevronDown,
@@ -8,8 +9,8 @@ import {
 } from "lucide-react";
 import type { Scope, ScanRun } from "../types";
 import { scanPending, scanStatus } from "../scanStatus";
-import { PerformanceControl } from "./PerformanceControl";
 import { formatDate } from "./FileIcon";
+import { ScanIssues } from "./ScanIssues";
 function elapsedLabel(ms: number) {
   const seconds = Math.floor(ms / 1000);
   if (seconds < 60) return `${seconds} 秒`;
@@ -46,6 +47,7 @@ export function ScanStatus({
   runs: ScanRun[];
   paused: boolean;
 }) {
+  const [expanded, setExpanded] = useState(false);
   if (!scopes.length) return null;
   const state = scanStatus(scopes, runs, paused);
   const { run } = state;
@@ -77,9 +79,12 @@ export function ScanStatus({
   return (
     <details
       className={`scan-status${state.warning ? " incomplete" : ""}${state.paused ? " paused" : ""}`}
+      onToggle={(event) => setExpanded(event.currentTarget.open)}
     >
-      <summary className="scan-status-summary">
-        <span className="scan-status-label" role="status">
+      <summary
+        className={`scan-status-summary${state.active.length > 0 && !state.finalizing ? " has-progress" : ""}`}
+      >
+        <span className="scan-status-label" role="status" title={state.title}>
           <Icon
             size={15}
             className={
@@ -105,13 +110,36 @@ export function ScanStatus({
             {state.percent !== null && <strong>{state.percent}%</strong>}
           </span>
         )}
-        <span className="scan-status-metric">{metric}</span>
+        <span className="scan-status-metric" title={metric}>
+          {metric}
+        </span>
         <span className="scan-status-toggle">
           详情 <ChevronDown size={14} />
         </span>
       </summary>
       <div className="scan-status-details">
-        <PerformanceControl />
+        {state.issues.map((scope) => (
+          <div key={scope.id} className="scan-issue">
+            <p>
+              <strong>{scope.name}</strong>：
+              {scope.message ||
+                (scope.availability === "offline"
+                  ? "文件夹离线，请检查磁盘连接。"
+                  : scope.availability !== "available"
+                    ? "无法访问，请检查路径和权限。"
+                    : "扫描结果不完整，可在文件夹设置中检查后重新扫描。")}
+            </p>
+            {expanded && scope.scanIssueCount > 0 && (
+              <ScanIssues scope={scope} />
+            )}
+            {!scope.scanIssueCount &&
+              scope.message?.includes("个路径无法完整扫描") && (
+                <p className="field-hint">
+                  这条记录尚未保存具体路径。点击“刷新”重新扫描后，会在这里列出路径和失败原因。
+                </p>
+              )}
+          </div>
+        ))}
         {run && (
           <p>
             本次范围：
@@ -156,17 +184,6 @@ export function ScanStatus({
               </p>
             )}
           </div>
-        ))}
-        {state.issues.map((scope) => (
-          <p key={scope.id} className="scan-issue">
-            <strong>{scope.name}</strong>：
-            {scope.message ||
-              (scope.availability === "offline"
-                ? "文件夹离线，请检查磁盘连接。"
-                : scope.availability !== "available"
-                  ? "无法访问，请检查路径和权限。"
-                  : "扫描结果不完整，可在文件夹设置中检查后重新扫描。")}
-          </p>
         ))}
         {!state.busy &&
           !state.issues.length &&

@@ -6,11 +6,9 @@ import {
   FolderPlus,
   FolderInput,
   Menu,
-  Plus,
   RefreshCw,
   Search,
   SlidersHorizontal,
-  History,
   Trash2,
   X,
 } from "lucide-react";
@@ -26,6 +24,7 @@ import { SearchBackend } from "./components/SearchBackend";
 import { MoveDialog } from "./components/MoveDialog";
 import { ScanStatus } from "./components/ScanStatus";
 import { DeleteDialog } from "./components/DeleteDialog";
+import { HiddenDirectoriesDialog } from "./components/HiddenDirectoriesDialog";
 
 export default function App() {
   const [query, setQuery] = useState<Query>(DEFAULT_QUERY);
@@ -33,6 +32,9 @@ export default function App() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [active, setActive] = useState<Entry | null>(null);
   const [dialog, setDialog] = useState<{ scope?: Scope } | null>(null);
+  const [hiddenDirectoryDialog, setHiddenDirectoryDialog] = useState<{
+    path: string;
+  } | null>(null);
   const [moving, setMoving] = useState<{ ids?: string[] } | null>(null);
   const [deleting, setDeleting] = useState<{ ids?: string[] } | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -185,19 +187,46 @@ export default function App() {
                 >
                   <Menu size={23} />
                 </button>
-                <div>
-                  <h1>{title}</h1>
-                  <p>
-                    {query.hidden
-                      ? "隐藏只改变视图，随时可以恢复显示"
-                      : "按类型聚合，文件保留在原位置"}
-                  </p>
+                <div className="heading-content">
+                  <h1 title={title}>{title}</h1>
+                  <div className="workspace-status">
+                    <span className="workspace-status-message" role="status">
+                      <i
+                        className={`status-dot ${!connected ? "offline" : scanning.length ? "busy" : ""}`}
+                      />
+                      <span>
+                        {!connected
+                          ? "正在连接本地索引服务"
+                          : summary.scanPaused
+                            ? "文件操作期间暂停扫描 · 完成后自动继续"
+                            : scanning.length
+                              ? `正在核对 ${scanning.length} 个文件夹 · 已发现 ${scanning.reduce((n, s) => n + s.scanned, 0).toLocaleString()} 个文件`
+                              : !summary.scopes.length
+                                ? "尚未添加文件夹"
+                                : summary.scopes.some(
+                                      (s) =>
+                                        s.availability !== "available" ||
+                                        s.freshness === "partial",
+                                    )
+                                  ? "部分文件夹需要处理，请查看文件夹设置"
+                                  : "已完成扫描"}
+                      </span>
+                    </span>
+                    {scanning.length > 0 && (
+                      <button
+                        className="text-button"
+                        onClick={() =>
+                          scanning.forEach(
+                            (scope) => void execute("cancel", { id: scope.id }),
+                          )
+                        }
+                      >
+                        取消扫描
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
-              <button className="button primary" onClick={() => setDialog({})}>
-                <Plus size={18} />
-                添加文件夹
-              </button>
             </header>
             <div className="toolbar">
               <select
@@ -270,22 +299,6 @@ export default function App() {
                 onClick={() => setFilters(!filters)}
               >
                 <SlidersHorizontal size={18} />
-              </button>
-              <button
-                className="icon-button"
-                aria-label="移动记录"
-                title="移动记录"
-                onClick={() => setMoving({})}
-              >
-                <FolderInput size={18} />
-              </button>
-              <button
-                className="icon-button"
-                aria-label="删除记录"
-                title="删除记录"
-                onClick={() => setDeleting({})}
-              >
-                <History size={18} />
               </button>
             </div>
             {filters && (
@@ -403,17 +416,10 @@ export default function App() {
                 </div>
                 <h2>文件在原位，整理从这里开始</h2>
                 <p>
-                  添加一个文件夹，把分散在不同目录的同类文件
+                  从左侧栏添加文件夹，把分散在不同目录的同类文件
                   <br />
                   聚合到同一个视图。
                 </p>
-                <button
-                  className="button primary"
-                  onClick={() => setDialog({})}
-                >
-                  <Plus size={17} />
-                  添加第一个文件夹
-                </button>
                 <button
                   className="text-button demo-button"
                   disabled={working}
@@ -427,6 +433,11 @@ export default function App() {
               </div>
             ) : (
               <FileTable
+                scopeCount={
+                  summary.scopes.filter(
+                    (scope) => !query.scopeId || scope.id === query.scopeId,
+                  ).length
+                }
                 result={result}
                 query={query}
                 change={change}
@@ -438,6 +449,19 @@ export default function App() {
                 busyFiles={busyFiles}
                 loading={loading}
               />
+            )}
+            {query.hidden && summary.hiddenDirectories.length > 0 && (
+              <div className="hidden-directory-notice">
+                <span>
+                  随目录隐藏的文件，请通过“管理目录规则”恢复对应目录。
+                </span>
+                <button
+                  className="text-button"
+                  onClick={() => setHiddenDirectoryDialog({ path: "" })}
+                >
+                  管理目录规则
+                </button>
+              </div>
             )}
             {selected.size > 0 && (
               <div className="selection-bar">
@@ -486,53 +510,33 @@ export default function App() {
               notify={notify}
               fail={setError}
               remove={() => setDeleting({ ids: [selectedActive.id] })}
+              hideDirectory={() =>
+                setHiddenDirectoryDialog({ path: selectedActive.directoryPath })
+              }
             />
           )}
         </div>
-        <footer className="status-bar">
-          <span>
-            <i
-              className={`status-dot ${!connected ? "offline" : scanning.length ? "busy" : ""}`}
-            />
-            {!connected
-              ? "正在连接本地索引服务"
-              : summary.scanPaused
-                ? "文件操作期间暂停扫描 · 完成后自动继续"
-                : scanning.length
-                  ? `正在核对 ${scanning.length} 个文件夹 · 已发现 ${scanning.reduce((n, s) => n + s.scanned, 0).toLocaleString()} 个文件`
-                  : !summary.scopes.length
-                    ? "尚未添加文件夹"
-                    : summary.scopes.some(
-                          (s) =>
-                            s.availability !== "available" ||
-                            s.freshness === "partial",
-                        )
-                      ? "部分文件夹需要处理，请查看文件夹设置"
-                      : "状态：已完成扫描"}
-            {scanning.length > 0 && (
-              <button
-                className="text-button"
-                onClick={() =>
-                  scanning.forEach(
-                    (scope) => void execute("cancel", { id: scope.id }),
-                  )
-                }
-              >
-                取消扫描
-              </button>
-            )}
-          </span>
-          <span>
-            {summary.scopes.length} 个文件夹 · {summary.total.toLocaleString()}{" "}
-            个文件
-          </span>
-        </footer>
       </div>
       {dialog && (
         <ScopeDialog
           scope={dialog.scope}
           close={() => setDialog(null)}
           changed={changedScopes}
+          notify={notify}
+        />
+      )}
+      {hiddenDirectoryDialog && (
+        <HiddenDirectoriesDialog
+          scopes={summary.scopes}
+          rules={summary.hiddenDirectories}
+          initialPath={hiddenDirectoryDialog.path}
+          close={() => setHiddenDirectoryDialog(null)}
+          changed={() => {
+            refresh();
+            setSelected(new Set());
+            setActive(null);
+            change({ offset: 0 });
+          }}
           notify={notify}
         />
       )}

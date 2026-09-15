@@ -62,6 +62,13 @@ export function ContentIndex({
   const enabled = data?.scopes.filter((s) => s.enabled) ?? [];
   const ready = enabled.reduce((n, s) => n + s.ready, 0);
   const pending = enabled.reduce((n, s) => n + s.pending, 0);
+  const statusText = !data
+    ? "读取状态…"
+    : !enabled.length
+      ? "未启用 · 可按文件夹开启"
+      : enabled.length > 1
+        ? `已启用 ${enabled.length} 个文件夹 · 展开查看各文件夹进度`
+        : `${ready.toLocaleString()} 份文档可搜索${pending ? ` · ${pending.toLocaleString()} 份待处理` : " · 本轮处理完成"}`;
   async function act(id: string, action: string) {
     setBusy(true);
     try {
@@ -83,15 +90,7 @@ export function ContentIndex({
       >
         <BookOpen size={16} />
         <strong>内容索引</strong>
-        <span>
-          {!data
-            ? "读取状态…"
-            : !enabled.length
-              ? "未启用 · 可按文件夹开启"
-              : enabled.length > 1
-                ? `已启用 ${enabled.length} 个文件夹 · 展开查看各文件夹进度`
-                : `${ready.toLocaleString()} 份文档可搜索${pending ? ` · ${pending.toLocaleString()} 份待处理` : " · 本轮处理完成"}`}
-        </span>
+        <span title={statusText}>{statusText}</span>
         <ChevronDown size={15} />
       </button>
       {open && (

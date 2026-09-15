@@ -130,6 +130,129 @@ fn child_worker_claims_pending_parent_and_does_not_scan_twice() {
 }
 
 #[test]
+fn scan_failures_are_deduplicated_persisted_and_cleared_only_when_rechecked() {
+    let f = Fixture::new();
+    for name in [
+        "资料_100%/keep.txt",
+        "资料_100%-other/keep.txt",
+        "single.txt",
+        "gone.txt",
+    ] {
+        f.file(name);
+    }
+    let scope = f.scope("", true, &[]);
+    run(&f.engine, &scope.0, &scope.1).unwrap();
+    fs::remove_file(f.root.join("gone.txt")).unwrap();
+    let version = db::root(&f.engine.lock().unwrap(), &scope.0).unwrap().2;
+    let failures = [
+        Failure::new(
+            &f.root.join("资料_100%"),
+            "directory",
+            "读取目录失败：访问被拒绝",
+        ),
+        Failure::new(
+            &f.root.join("资料_100%"),
+            "directory",
+            "重新读取目录失败：访问被拒绝",
+        ),
+        Failure::new(
+            &f.root.join("资料_100%-other"),
+            "directory",
+            "目录尚未完整下载",
+        ),
+        Failure::new(&f.root.join("single.txt"), "file", "读取文件身份失败"),
+    ];
+    finish_scan(
+        &f.engine,
+        &scope.0,
+        Completion {
+            limits: None,
+            defer_cleanup: false,
+            version,
+            generation: "failed-pass",
+            failed: &failures,
+            count: 0,
+            dirty: false,
+            watch_failed: false,
+            control: Some(&scope.1),
+        },
+    )
+    .unwrap();
+    assert_eq!(f.names(&scope.0), ["keep.txt", "keep.txt", "single.txt"]);
+    let summary = f.engine.summary().unwrap();
+    assert_eq!(summary.scopes[0].scan_issue_count, 3);
+    assert_eq!(
+        summary.scopes[0].message.as_deref(),
+        Some("3 个路径无法完整扫描，保留其旧索引。")
+    );
+    let mut all = Vec::new();
+    for offset in 0..3 {
+        let page = f.engine.scan_issues(&scope.0, offset, 1).unwrap();
+        assert_eq!(page.total, 3);
+        assert_eq!(page.items.len(), 1);
+        all.extend(page.items);
+    }
+    assert_eq!(all.iter().filter(|issue| issue.kind == "file").count(), 1);
+    assert_eq!(
+        all.iter()
+            .filter(|issue| issue.reason.contains("重新读取"))
+            .count(),
+        1
+    );
+    let persisted = crate::db::connect_reader(&f._temp.path().join("state/index.sqlite")).unwrap();
+    assert_eq!(scan_issues::count(&persisted, &scope.0).unwrap(), 3);
+
+    // Rechecking a subtree cannot clear a similarly named sibling's failure.
+    assert!(update_files(&f.engine, &scope.0, &scope.1, &[f.root.join("资料_100%")]).unwrap());
+    let remaining = f.engine.scan_issues(&scope.0, 0, 50).unwrap();
+    assert_eq!(remaining.total, 2);
+    assert!(remaining
+        .items
+        .iter()
+        .any(|issue| issue.path.ends_with("资料_100%-other")));
+    assert_eq!(f.engine.summary().unwrap().scopes[0].freshness, "partial");
+    assert!(update_files(&f.engine, &scope.0, &scope.1, &[f.root.join("single.txt")]).unwrap());
+    assert_eq!(f.engine.scan_issues(&scope.0, 0, 50).unwrap().total, 1);
+    run(&f.engine, &scope.0, &scope.1).unwrap();
+    assert_eq!(f.engine.scan_issues(&scope.0, 0, 50).unwrap().total, 0);
+    assert_eq!(f.engine.summary().unwrap().scopes[0].freshness, "current");
+    f.engine.lock().unwrap().execute("UPDATE scopes SET freshness='partial',message='2 个路径无法完整扫描，保留其旧索引。' WHERE id=?", [&scope.0]).unwrap();
+    assert!(update_files(&f.engine, &scope.0, &scope.1, &[f.root.join("single.txt")]).unwrap());
+    assert_eq!(
+        f.engine.summary().unwrap().scopes[0].message.as_deref(),
+        Some("2 个路径无法完整扫描，保留其旧索引。")
+    );
+    f.engine.remove_scope(&scope.0).unwrap();
+    assert!(f.engine.scan_issues(&scope.0, 0, 50).is_err());
+}
+
+#[test]
+fn missing_root_is_listed_with_the_actual_path_and_system_error() {
+    let f = Fixture::new();
+    f.file("keep.txt");
+    let scope = f.scope("", true, &[]);
+    run(&f.engine, &scope.0, &scope.1).unwrap();
+    let moved = f._temp.path().join("temporarily-offline");
+    fs::rename(&f.root, &moved).unwrap();
+    run(&f.engine, &scope.0, &scope.1).unwrap();
+    let page = f
+        .engine
+        .dispatch("scan_issues", serde_json::json!({"id":scope.0}))
+        .unwrap();
+    assert_eq!(page["total"], 1);
+    assert_eq!(page["items"][0]["path"], display_path(&f.root));
+    assert_eq!(page["items"][0]["kind"], "directory");
+    assert!(page["items"][0]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("路径不存在"));
+    assert_eq!(f.names(&scope.0), ["keep.txt"]);
+    fs::rename(moved, &f.root).unwrap();
+    run(&f.engine, &scope.0, &scope.1).unwrap();
+    assert_eq!(f.engine.scan_issues(&scope.0, 0, 50).unwrap().total, 0);
+}
+
+#[test]
 fn cancelling_one_member_keeps_other_members_running_and_old_memberships() {
     let f = Fixture::new();
     f.file("a.txt");

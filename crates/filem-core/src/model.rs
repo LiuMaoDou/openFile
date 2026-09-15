@@ -32,6 +32,8 @@ fn default_excludes() -> Vec<String> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Scope {
+    #[serde(default)]
+    pub scan_issue_count: u64,
     pub progress: Option<ScanProgress>,
     pub content_enabled: bool,
     pub content_paused: bool,
@@ -57,6 +59,20 @@ pub struct ScanProgress {
     pub discovered_directories: u64,
     pub current_path: String,
     pub elapsed_ms: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ScanIssue {
+    pub path: String,
+    pub kind: String,
+    pub reason: String,
+}
+#[derive(Debug, Serialize)]
+pub struct ScanIssuePage {
+    pub items: Vec<ScanIssue>,
+    pub total: u64,
+    pub offset: usize,
+    pub limit: usize,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -104,6 +120,7 @@ pub struct Entry {
     pub id: String,
     pub name: String,
     pub directory: String,
+    pub directory_path: String,
     pub path: String,
     pub extension: String,
     pub group: String,
@@ -114,6 +131,7 @@ pub struct Entry {
     pub online: bool,
     pub hidden: bool,
     pub placeholder: bool,
+    pub directory_hidden: bool,
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -134,6 +152,7 @@ pub struct Bucket {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Summary {
+    pub hidden_directories: Vec<HiddenDirectory>,
     pub scan_runs: Vec<ScanRun>,
     pub facet_scope_id: String,
     pub facet_hidden: bool,
@@ -146,6 +165,11 @@ pub struct Summary {
     pub hidden_extensions: Vec<Bucket>,
     pub groups: Vec<Bucket>,
     pub revision: u64,
+}
+#[derive(Debug, Clone, Serialize)]
+pub struct HiddenDirectory {
+    pub id: String,
+    pub path: String,
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]

@@ -2,7 +2,6 @@ import { version } from "../../package.json";
 import {
   Archive,
   Braces,
-  Check,
   ChevronRight,
   EyeOff,
   FileText,
@@ -79,8 +78,7 @@ export function Sidebar({
         </button>
       </div>
       <nav>
-        <section className="nav-section">
-          <h2>文件库</h2>
+        <section className="nav-section" aria-label="文件库">
           <button
             className={`nav-item ${!query.hidden && !query.group && !query.scopeId ? "active" : ""}`}
             onClick={() =>
@@ -102,8 +100,7 @@ export function Sidebar({
             {summary.hidden > 0 && <small>{summary.hidden}</small>}
           </button>
         </section>
-        <section className="nav-section">
-          <h2>监控文件夹</h2>
+        <section className="nav-section" aria-label="监控文件夹">
           {summary.scopes.length === 0 && (
             <p className="nav-empty">从一个文件夹开始</p>
           )}
@@ -139,13 +136,18 @@ export function Sidebar({
               </button>
             </div>
           ))}
-          <button className="button outline add-scope-side" onClick={add}>
-            <Plus size={16} />
+          <button
+            className="button primary add-scope-side"
+            onClick={() => {
+              close();
+              add();
+            }}
+          >
+            <Plus size={18} />
             添加文件夹
           </button>
         </section>
-        <section className="nav-section types">
-          <h2>文件类型</h2>
+        <section className="nav-section types" aria-label="文件类型">
           {summary.facetScopeId !== query.scopeId ||
           summary.facetHidden !== query.hidden ? (
             <p className="nav-empty">正在统计…</p>
@@ -183,10 +185,6 @@ export function Sidebar({
       </nav>
       <div className="sidebar-footer">
         <ThemeControl />
-        <div className="sidebar-foot">
-          <Check size={13} />
-          仅索引指定文件夹
-        </div>
         <div className="sidebar-version" aria-label={`FileM 版本 ${version}`}>
           FileM v{version}
           {import.meta.env.DEV ? " · 开发版" : ""}

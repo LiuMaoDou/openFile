@@ -74,8 +74,7 @@ export function ThemeControl() {
 
   return (
     <div className="theme-control">
-      <span id="theme-label">外观</span>
-      <div className="theme-options" role="group" aria-labelledby="theme-label">
+      <div className="theme-options" role="group" aria-label="外观">
         {choices.map(({ value, label, Icon }) => (
           <button
             key={value}

@@ -1,3 +1,4 @@
+use crate::scan_issues::{self, Failure};
 use crate::{db, model, platform::*, rules::Excludes, Control, Engine};
 use anyhow::{bail, Result};
 use rayon::prelude::*;
@@ -39,7 +40,7 @@ enum ReadEvent {
 }
 struct Batch {
     dirs: Vec<PathBuf>,
-    failed: Vec<PathBuf>,
+    failed: Vec<Failure>,
 }
 struct ProgressGuard<'a>(&'a Control);
 impl Drop for ProgressGuard<'_> {
@@ -144,18 +145,48 @@ impl Reader<'_> {
                 0,
             );
         }
-        let safe = (!self.limited || self.scopes.iter().any(|s| safe_ancestors(dir, &s.root)))
-            && fs::symlink_metadata(dir).is_ok_and(|m| {
-                m.is_dir() && !m.file_type().is_symlink() && !reparse(attributes(&m))
-            })
-            && dir.canonicalize().is_ok_and(|p| {
-                !p.starts_with(self.storage)
-                    && self
-                        .scopes
-                        .iter()
-                        .any(|s| s.live() && p.starts_with(&s.root))
-            });
-        if !safe {
+        let checked = (|| -> std::result::Result<(), Failure> {
+            if self.limited && !self.scopes.iter().any(|s| safe_ancestors(dir, &s.root)) {
+                return Err(Failure::new(
+                    dir,
+                    "directory",
+                    "父目录已改变、变成链接或无法访问，无法安全核对。",
+                ));
+            }
+            let meta = fs::symlink_metadata(dir)
+                .map_err(|error| Failure::io(dir, "directory", "读取目录信息失败", &error))?;
+            if !meta.is_dir() {
+                return Err(Failure::new(
+                    dir,
+                    "directory",
+                    "该路径已不再是文件夹，可能在扫描期间被替换。",
+                ));
+            }
+            if meta.file_type().is_symlink() || reparse(attributes(&meta)) {
+                return Err(Failure::new(
+                    dir,
+                    "directory",
+                    "目录是符号链接或重解析点，当前扫描不跟随此类目录。",
+                ));
+            }
+            let canonical = dir
+                .canonicalize()
+                .map_err(|error| Failure::io(dir, "directory", "解析目录路径失败", &error))?;
+            if canonical.starts_with(self.storage)
+                || !self
+                    .scopes
+                    .iter()
+                    .any(|s| s.live() && canonical.starts_with(&s.root))
+            {
+                return Err(Failure::new(
+                    dir,
+                    "directory",
+                    "目录的实际位置已改变或不在允许扫描的范围内。",
+                ));
+            }
+            Ok(())
+        })();
+        if let Err(failure) = checked {
             // A deleted/replaced subtree is a successful empty observation only
             // when all surviving ancestors are still normal authorized folders.
             if self.limited
@@ -166,13 +197,15 @@ impl Reader<'_> {
             {
                 return batch;
             }
-            batch.failed.push(dir.into());
+            batch.failed.push(failure);
             return batch;
         }
         let iter = match crate::scan_entry::read_dir(dir) {
             Ok(iter) => iter,
-            Err(_) => {
-                batch.failed.push(dir.into());
+            Err(error) => {
+                batch
+                    .failed
+                    .push(Failure::io(dir, "directory", "列出目录内容失败", &error));
                 return batch;
             }
         };
@@ -184,8 +217,10 @@ impl Reader<'_> {
             }
             let item = match item {
                 Ok(item) => item,
-                Err(_) => {
-                    batch.failed.push(dir.into());
+                Err(error) => {
+                    batch
+                        .failed
+                        .push(Failure::io(dir, "directory", "读取目录条目失败", &error));
                     continue;
                 }
             };
@@ -210,8 +245,10 @@ impl Reader<'_> {
             if counting {
                 match item.file_type() {
                     Ok(kind) if !kind.is_dir() || kind.is_symlink() => continue,
-                    Err(_) => {
-                        batch.failed.push(path);
+                    Err(error) => {
+                        batch
+                            .failed
+                            .push(Failure::io(&path, "path", "读取路径类型失败", &error));
                         continue;
                     }
                     _ => {}
@@ -220,8 +257,10 @@ impl Reader<'_> {
             // This never follows symlinks, and reuses enumeration metadata on Windows.
             let meta = match item.metadata() {
                 Ok(m) => m,
-                Err(_) => {
-                    batch.failed.push(path);
+                Err(error) => {
+                    batch
+                        .failed
+                        .push(Failure::io(&path, "path", "读取文件或目录信息失败", &error));
                     continue;
                 }
             };
@@ -231,7 +270,15 @@ impl Reader<'_> {
             }
             if meta.is_dir() && dir_mask != 0 {
                 if reparse(attrs) || placeholder(attrs) {
-                    batch.failed.push(path);
+                    batch.failed.push(Failure::new(
+                        &path,
+                        "directory",
+                        if placeholder(attrs) {
+                            "云盘占位目录尚未完整下载到本机，当前扫描不会主动下载其内容。"
+                        } else {
+                            "目录是重解析点或链接，当前扫描不跟随此类目录。"
+                        },
+                    ));
                 } else {
                     batch.dirs.push(path);
                 }
@@ -243,7 +290,11 @@ impl Reader<'_> {
                         identity,
                         scopes: file_mask,
                     }),
-                    Err(_) => batch.failed.push(path),
+                    Err(error) => batch.failed.push(Failure::new(
+                        &path,
+                        "file",
+                        format!("读取文件身份失败：{error:#}"),
+                    )),
                 }
             }
             if files.len() == READ_CHUNK
@@ -323,28 +374,34 @@ fn run_group_limited(
         let meta = match fs::metadata(&root) {
             Ok(meta) => meta,
             Err(error) => {
-                db::set_state(
-                    &*engine.lock()?,
+                scan_issues::root_failure(
+                    engine,
                     id,
                     if error.kind() == std::io::ErrorKind::PermissionDenied {
                         "access_denied"
                     } else {
                         "offline"
                     },
-                    "partial",
-                    Some(&error.to_string()),
+                    Failure::io(&root, "directory", "读取监控文件夹失败", &error),
                 )?;
                 continue;
             }
         };
-        if !identity(&root, &meta).is_ok_and(|value| value == expected) {
-            db::set_state(
-                &*engine.lock()?,
-                id,
-                "identity_changed",
-                "partial",
-                Some("根目录身份发生变化，请移除后重新选择文件夹。"),
-            )?;
+        let identity_failure = match identity(&root, &meta) {
+            Ok(value) if value == expected => None,
+            Ok(_) => Some(Failure::new(
+                &root,
+                "directory",
+                "根目录身份发生变化，请检查路径后重新选择文件夹。",
+            )),
+            Err(error) => Some(Failure::new(
+                &root,
+                "directory",
+                format!("读取文件夹身份失败：{error:#}"),
+            )),
+        };
+        if let Some(failure) = identity_failure {
+            scan_issues::root_failure(engine, id, "identity_changed", failure)?;
             continue;
         }
         scopes.push(ReadScope {
@@ -465,7 +522,8 @@ fn run_group_limited(
         plan.extend(dirs);
         let mut discovered = Vec::new();
         for batch in batches {
-            failed.extend(batch.failed);
+            // The actual scan retries these paths. Planning failures must not
+            // duplicate (or outlive) the result of that second observation.
             for dir in batch.dirs {
                 if planned.insert(dir.clone()) {
                     discovered.push(dir);
@@ -614,7 +672,9 @@ fn run_group_limited(
             continue;
         }
         for batch in batches {
-            failed.extend(batch.dirs.into_iter().filter(|p| !planned.contains(p)));
+            failed.extend(batch.dirs.into_iter().filter(|p| !planned.contains(p)).map(|path|
+                Failure::new(&path, "directory", "扫描期间新出现或恢复可访问的目录，尚未纳入本次扫描计划，请刷新后核对。")
+            ));
             failed.extend(batch.failed);
         }
     }
@@ -633,7 +693,9 @@ fn run_group_limited(
             }
             let failed: Vec<_> = failed
                 .iter()
-                .filter(|p| scope.includes(p, true) || scope.includes(p, false))
+                .filter(|failure| {
+                    scope.includes(&failure.path, true) || scope.includes(&failure.path, false)
+                })
                 .cloned()
                 .collect();
             progress(&scope.control, "finalizing", &scope.root, 0, 0);
@@ -655,14 +717,16 @@ fn run_group_limited(
         })();
         if let Err(error) = result {
             incomplete = true;
-            let c = engine.lock()?;
             if scope.live() {
-                db::set_state(
-                    &c,
+                scan_issues::root_failure(
+                    engine,
                     &scope.id,
                     "available",
-                    "partial",
-                    Some(&error.to_string()),
+                    Failure::new(
+                        &scope.root,
+                        "directory",
+                        format!("完成目录核对失败：{error:#}"),
+                    ),
                 )?;
             }
         }
@@ -695,7 +759,7 @@ struct Completion<'a> {
     defer_cleanup: bool,
     version: i64,
     generation: &'a str,
-    failed: &'a [PathBuf],
+    failed: &'a [Failure],
     count: usize,
     dirty: bool,
     watch_failed: bool,
@@ -757,7 +821,10 @@ fn finish_scan(engine: &Engine, id: &str, snapshot: Completion<'_>) -> Result<()
             .collect::<rusqlite::Result<_>>()?;
         rows
     };
-    let failed_set: HashSet<_> = failed.iter().map(PathBuf::as_path).collect();
+    let failed_set: HashSet<_> = failed
+        .iter()
+        .map(|failure| failure.path.as_path())
+        .collect();
     for (entry_id, dir, name) in stale {
         let path = PathBuf::from(decode(&dir)).join(decode(&name));
         if !path
@@ -779,15 +846,16 @@ fn finish_scan(engine: &Engine, id: &str, snapshot: Completion<'_>) -> Result<()
     } else {
         None
     };
-    let message = if !failed.is_empty() {
-        Some(format!(
-            "{} 个路径无法完整扫描，保留其旧索引。",
-            failed.len()
-        ))
+    let previous_issue_count = scan_issues::count(&tx, id)?;
+    scan_issues::replace(&tx, id, limits, failed)?;
+    let issue_count = scan_issues::count(&tx, id)?;
+    let message = if issue_count > 0 {
+        Some(scan_issues::summary(issue_count))
     } else if watch_failed {
         Some("实时监听不可用，请手动刷新。".into())
     } else {
         previous_message
+            .filter(|message| previous_issue_count == 0 || !scan_issues::is_summary(message))
     };
     let count = if limits.is_some() {
         tx.query_row(
@@ -804,7 +872,7 @@ fn finish_scan(engine: &Engine, id: &str, snapshot: Completion<'_>) -> Result<()
         params![
             if control.map_or(dirty, |c| c.dirty.load(Ordering::SeqCst)) {
                 "dirty"
-            } else if failed.is_empty() && message.is_none() {
+            } else if issue_count == 0 && message.is_none() {
                 "current"
             } else {
                 "partial"
@@ -914,12 +982,13 @@ fn write_found(
 
 fn upsert_entries(tx: &Connection, chunk: &[&Found]) -> Result<Vec<i64>> {
     let mut ids = Vec::with_capacity(chunk.len());
+    let hidden_roots = crate::hidden::roots(tx)?;
     {
         // Keep prepared statements checked out for the transaction rather than
         // repeatedly hashing long SQL strings and returning them to the cache.
         let mut find_directory = tx.prepare_cached("SELECT id FROM directories WHERE path=?")?;
         let mut add_directory =
-            tx.prepare_cached("INSERT INTO directories(path,display) VALUES(?,?)")?;
+            tx.prepare_cached("INSERT INTO directories(path,display,hidden) VALUES(?,?,?)")?;
         let mut find_entry = tx.prepare_cached(
             "SELECT id,identity,name=?3 AND extension=?4 AND group_name=?5 AND size=?6 AND mtime=?7 AND attributes=?8 FROM entries WHERE dir_id=?1 AND native_name=?2"
         )?;
@@ -951,7 +1020,11 @@ fn upsert_entries(tx: &Connection, chunk: &[&Found]) -> Result<Vec<i64>> {
                     let dir_id = match existing {
                         Some(id) => id,
                         None => {
-                            add_directory.execute(params![native, parent.to_string_lossy()])?;
+                            add_directory.execute(params![
+                                native,
+                                parent.to_string_lossy(),
+                                crate::hidden::contains(&hidden_roots, parent)
+                            ])?;
                             tx.last_insert_rowid()
                         }
                     };
@@ -1178,12 +1251,20 @@ pub(crate) fn update_files(
             .iter()
             .any(|root| path != root && path.starts_with(root))
     });
-    index_candidates(engine, id, &present)?;
+    let indexed = index_candidates(engine, id, &present)?;
     let _permit = engine.inner.scan_gate.enter();
     let mut c = engine.lock()?;
     let tx = c.transaction()?;
     if db::root(&tx, id)?.2 != version || control.cancel.load(Ordering::SeqCst) {
         bail!("文件夹配置已改变或扫描已取消。");
+    }
+    let previous_issue_count = scan_issues::count(&tx, id)?;
+    for entry_id in indexed {
+        let path = db::entry_path(&tx, &entry_id)?.0;
+        tx.execute(
+            "DELETE FROM scan_issues WHERE scope_id=? AND path=?",
+            params![id, encode(path.as_os_str())],
+        )?;
     }
     for path in missing {
         if !fs::symlink_metadata(path).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound) {
@@ -1202,6 +1283,19 @@ pub(crate) fn update_files(
             tx.execute("DELETE FROM entries WHERE id=? AND NOT EXISTS(SELECT 1 FROM memberships WHERE entry_id=?)", params![entry,entry])?;
             tx.execute("DELETE FROM directories WHERE id=? AND NOT EXISTS(SELECT 1 FROM entries WHERE dir_id=?)", params![dir,dir])?;
         }
+        tx.execute(
+            "DELETE FROM scan_issues WHERE scope_id=? AND path=?",
+            params![id, encode(path.as_os_str())],
+        )?;
+    }
+    let message: Option<String> =
+        tx.query_row("SELECT message FROM scopes WHERE id=?", [id], |r| r.get(0))?;
+    if previous_issue_count > 0 && message.as_deref().is_some_and(scan_issues::is_summary) {
+        let count = scan_issues::count(&tx, id)?;
+        tx.execute(
+            "UPDATE scopes SET message=? WHERE id=?",
+            params![(count > 0).then(|| scan_issues::summary(count)), id],
+        )?;
     }
     tx.execute(
         "UPDATE scopes SET freshness=CASE WHEN ? THEN 'dirty' WHEN message IS NOT NULL THEN 'partial' ELSE 'current' END WHERE id=?",

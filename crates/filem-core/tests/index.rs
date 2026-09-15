@@ -87,6 +87,10 @@ fn unicode_paths_survive_queries_delete_previews_and_restart() {
     assert!(!scope.path.starts_with(r"\\?\"));
     let entry = engine.query(&Query::default()).unwrap().entries.remove(0);
     assert_eq!(entry.name, "项目方案 📄.md");
+    assert_eq!(
+        Path::new(&entry.directory_path).canonicalize().unwrap(),
+        source.parent().unwrap().canonicalize().unwrap()
+    );
     assert!(entry.path.ends_with(&format!(
         "中文资料 📁{}子目录{}项目方案 📄.md",
         std::path::MAIN_SEPARATOR,
@@ -250,6 +254,164 @@ fn hide_restore_is_persistent_and_never_changes_the_source() {
         "# Keep me\n"
     );
 }
+
+#[test]
+fn directory_hiding_includes_descendants_and_future_files_after_restart() {
+    let (tmp, e, root) = setup();
+    write(&root.join("资料_100%/one.md"), "keep this text");
+    write(&root.join("资料_100%/deep/two.txt"), "two");
+    write(&root.join("资料_100%-other/visible.md"), "visible");
+    let scope = e.add_scope(input(&root)).unwrap();
+    let child = e.add_scope(input(&root.join("资料_100%"))).unwrap();
+    wait(&e, &scope);
+    wait(&e, &child);
+    e.dispatch(
+        "hide_directory",
+        serde_json::json!({"path": root.join("资料_100%")}),
+    )
+    .unwrap();
+    e.hide_directory(&root.join("资料_100%/.")).unwrap();
+    assert_eq!(e.summary().unwrap().hidden_directories.len(), 1);
+    assert_eq!(names(&e, Query::default()), ["visible.md"]);
+    assert_eq!(e.summary().unwrap().hidden, 2);
+    assert_eq!(
+        e.query(&Query {
+            scope_id: child.clone(),
+            ..Default::default()
+        })
+        .unwrap()
+        .total,
+        0
+    );
+    let hidden = e
+        .query(&Query {
+            hidden: true,
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(hidden
+        .entries
+        .iter()
+        .all(|entry| entry.hidden && entry.directory_hidden));
+    let summary = e
+        .dispatch(
+            "summary",
+            serde_json::json!({"scopeId":child,"hidden":true}),
+        )
+        .unwrap();
+    assert_eq!(summary["groups"][0]["count"], 2);
+    assert_eq!(summary["hiddenExtensions"].as_array().unwrap().len(), 2);
+
+    write(&root.join("资料_100%/new/sub/three.txt"), "new file");
+    e.refresh(&scope).unwrap();
+    wait(&e, &scope);
+    assert_eq!(e.summary().unwrap().hidden, 3);
+    let replacement = root.join("replacement.txt");
+    write(&replacement, "replacement body");
+    fs::remove_file(root.join("资料_100%/one.md")).unwrap();
+    fs::rename(replacement, root.join("资料_100%/one.md")).unwrap();
+    drop(e);
+    write(&root.join("资料_100%/new/sub/four.txt"), "after restart");
+    let e = Engine::open(tmp.path().join("state/index.sqlite")).unwrap();
+    wait(&e, &scope);
+    wait(&e, &child);
+    assert_eq!(e.summary().unwrap().hidden, 4);
+    assert_eq!(names(&e, Query::default()), ["visible.md"]);
+    let rule = e.summary().unwrap().hidden_directories.remove(0);
+    e.dispatch("restore_directory", serde_json::json!({"id":rule.id}))
+        .unwrap();
+    assert_eq!(e.summary().unwrap().total, 5);
+    assert_eq!(e.summary().unwrap().hidden, 0);
+    assert_eq!(
+        fs::read_to_string(root.join("资料_100%/one.md")).unwrap(),
+        "replacement body"
+    );
+}
+
+#[test]
+fn directory_restore_preserves_nested_rules_and_individual_hiding() {
+    let (_tmp, e, root) = setup();
+    write(&root.join("parent/manual.txt"), "manual");
+    write(&root.join("parent/normal.md"), "normal");
+    write(&root.join("parent/child/deep.md"), "deep");
+    let scope = e.add_scope(input(&root)).unwrap();
+    wait(&e, &scope);
+    let manual = e
+        .query(&Query {
+            search: "manual.txt".into(),
+            ..Default::default()
+        })
+        .unwrap()
+        .entries
+        .remove(0)
+        .id;
+    e.set_hidden(std::slice::from_ref(&manual), true).unwrap();
+    e.hide_directory(&root.join("parent")).unwrap();
+    e.hide_directory(&root.join("parent/child")).unwrap();
+    assert!(e
+        .set_hidden(std::slice::from_ref(&manual), false)
+        .unwrap_err()
+        .to_string()
+        .contains("管理目录规则"));
+    let rules = e.summary().unwrap().hidden_directories;
+    e.restore_directory(&rules[0].id).unwrap();
+    assert_eq!(names(&e, Query::default()), ["normal.md"]);
+    e.restore_directory(&rules[1].id).unwrap();
+    assert_eq!(e.summary().unwrap().hidden, 1);
+    let manual_entry = e
+        .query(&Query {
+            hidden: true,
+            ..Default::default()
+        })
+        .unwrap()
+        .entries
+        .remove(0);
+    assert_eq!(manual_entry.id, manual);
+    assert!(!manual_entry.directory_hidden);
+    e.set_hidden(&[manual], false).unwrap();
+    assert_eq!(e.summary().unwrap().total, 3);
+}
+
+#[test]
+fn directory_rules_cover_empty_directories_moves_and_offline_restore() {
+    let (_tmp, e, root) = setup();
+    write(&root.join("visible.txt"), "original content");
+    fs::create_dir(root.join("empty")).unwrap();
+    let scope = e.add_scope(input(&root)).unwrap();
+    wait(&e, &scope);
+    e.hide_directory(&root.join("empty")).unwrap();
+    let entry = e.query(&Query::default()).unwrap().entries.remove(0);
+    let plan = e
+        .preview_move(
+            std::slice::from_ref(&entry.id),
+            root.join("empty").to_str().unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        e.execute_move(&plan.operation.id).unwrap().operation.items[0].status,
+        "succeeded"
+    );
+    assert_eq!(e.summary().unwrap().total, 0);
+    assert_eq!(e.summary().unwrap().hidden, 1);
+    let plan = e
+        .preview_move(std::slice::from_ref(&entry.id), root.to_str().unwrap())
+        .unwrap();
+    assert_eq!(
+        e.execute_move(&plan.operation.id).unwrap().operation.items[0].status,
+        "succeeded"
+    );
+    assert_eq!(e.summary().unwrap().total, 1);
+    assert_eq!(e.summary().unwrap().hidden, 0);
+    fs::remove_dir(root.join("empty")).unwrap();
+    let rule = e.summary().unwrap().hidden_directories.remove(0);
+    e.restore_directory(&rule.id).unwrap();
+    assert!(e.summary().unwrap().hidden_directories.is_empty());
+    assert!(e.hide_directory(Path::new("relative")).is_err());
+    assert!(e.hide_directory(&root.join("visible.txt")).is_err());
+    let unrelated = tempfile::tempdir().unwrap();
+    assert!(e.hide_directory(unrelated.path()).is_err());
+}
+
 #[test]
 fn restart_reconciles_deep_modifications_and_deletions() {
     let (tmp, e, root) = setup();

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Copy, Trash2, X } from "lucide-react";
+import { Copy, EyeOff, Trash2, X } from "lucide-react";
 import { command, errorText } from "../api";
 import type { Entry } from "../types";
 import { FileIcon, formatDate, formatSize } from "./FileIcon";
@@ -10,6 +10,7 @@ export function Inspector({
   notify,
   fail,
   remove,
+  hideDirectory,
 }: {
   entry: Entry;
   search: string;
@@ -17,6 +18,7 @@ export function Inspector({
   notify: (text: string) => void;
   fail: (text: string) => void;
   remove: () => void;
+  hideDirectory: () => void;
 }) {
   const [preview, setPreview] = useState<{
     text: string;
@@ -103,6 +105,11 @@ export function Inspector({
         <dt>所属文件夹</dt>
         <dd>{entry.scopeName}</dd>
       </dl>
+      {entry.directoryHidden && (
+        <p className="inline-info">
+          此文件随目录隐藏，点击下方“管理目录隐藏”可恢复对应目录。
+        </p>
+      )}
       {(!entry.online || entry.placeholder) && (
         <p className="inline-info">
           {entry.placeholder
@@ -110,7 +117,7 @@ export function Inspector({
             : "所在文件夹不可用，正在显示上次索引。"}
         </p>
       )}
-      <div className="inspector-actions">
+      <div className="inspector-actions" role="group" aria-label="文件操作">
         <button
           className="button primary"
           disabled={
@@ -135,20 +142,25 @@ export function Inspector({
           <Copy size={15} />
           复制路径
         </button>
+        <button className="button outline" onClick={hideDirectory}>
+          <EyeOff size={15} />
+          {entry.directoryHidden ? "管理目录隐藏" : "隐藏所在目录"}
+        </button>
+        <button
+          className="button outline danger-text"
+          disabled={!entry.online || entry.placeholder}
+          onClick={remove}
+        >
+          <Trash2 size={15} />
+          删除此文件
+        </button>
       </div>
+      <p className="field-hint">目录隐藏包含所在目录及其所有子目录的文件。</p>
       {!textType && !indexed && (
         <p className="field-hint">
           此格式暂不提供内置预览，可使用系统应用打开。
         </p>
       )}
-      <button
-        className="button outline danger-text inspector-delete"
-        disabled={!entry.online || entry.placeholder}
-        onClick={remove}
-      >
-        <Trash2 size={15} />
-        删除此文件
-      </button>
       {preview && (
         <div className="text-preview">
           <header>

@@ -13,7 +13,7 @@ pub fn connect(path: &Path) -> Result<Connection> {
     let c = Connection::open(path)?;
     c.busy_timeout(std::time::Duration::from_secs(5))?;
     let version: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if version > 4 {
+    if version > 5 {
         bail!("索引版本高于当前应用支持的版本，请使用更新的 FileM。");
     }
     c.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;
@@ -48,6 +48,8 @@ pub fn connect(path: &Path) -> Result<Connection> {
       UPDATE move_operations SET state='interrupted' WHERE state='running';
 ")?;
     crate::content::migrate(&c)?;
+    crate::hidden::migrate(&c)?;
+    crate::scan_issues::migrate(&c)?;
     c.execute("UPDATE scopes SET freshness='verifying', availability='offline', message='正在校验上次索引'",[])?;
     Ok(c)
 }
@@ -60,10 +62,12 @@ pub fn revision(c: &Connection) -> Result<u64> {
 }
 pub fn scopes(c: &Connection) -> Result<Vec<Scope>> {
     let mut s=c.prepare("SELECT s.id,name,path,recursive,watch,excludes,availability,freshness,
-      (SELECT COUNT(*) FROM memberships m WHERE m.scope_id=s.id),scanned,last_scan,message,content_enabled,content_paused FROM scopes s ORDER BY rowid")?;
+      (SELECT COUNT(*) FROM memberships m WHERE m.scope_id=s.id),scanned,last_scan,message,content_enabled,content_paused,
+      (SELECT COUNT(*) FROM scan_issues i WHERE i.scope_id=s.id) FROM scopes s ORDER BY rowid")?;
     let result = s
         .query_map([], |r| {
             Ok(Scope {
+                scan_issue_count: r.get(14)?,
                 progress: None,
                 content_enabled: r.get(12)?,
                 content_paused: r.get(13)?,
@@ -121,11 +125,19 @@ pub fn cleanup(c: &Connection) -> Result<()> {
     c.execute("DELETE FROM directories WHERE NOT EXISTS (SELECT 1 FROM entries e WHERE e.dir_id=directories.id)",[])?;
     Ok(())
 }
+fn visibility_sql(hidden: bool) -> &'static str {
+    if hidden {
+        "(e.hidden=1 OR d.hidden=1)"
+    } else {
+        "e.hidden=0 AND d.hidden=0"
+    }
+}
 pub fn summary_for(c: &Connection, scope_id: &str, hidden: bool) -> Result<Summary> {
     fn buckets(c: &Connection, col: &str, hidden: bool, scope_id: &str) -> Result<Vec<Bucket>> {
-        let mut s=c.prepare(&format!("SELECT {col},COUNT(*) FROM entries e WHERE hidden=? AND (?='' OR EXISTS(SELECT 1 FROM memberships m WHERE m.entry_id=e.id AND m.scope_id=?)) GROUP BY {col} ORDER BY COUNT(*) DESC,{col}"))?;
+        let visibility = visibility_sql(hidden);
+        let mut s=c.prepare(&format!("SELECT {col},COUNT(*) FROM entries e JOIN directories d ON d.id=e.dir_id WHERE {visibility} AND (?='' OR EXISTS(SELECT 1 FROM memberships m WHERE m.entry_id=e.id AND m.scope_id=?)) GROUP BY {col} ORDER BY COUNT(*) DESC,{col}"))?;
         let result = s
-            .query_map(params![hidden, scope_id, scope_id], |r| {
+            .query_map(params![scope_id, scope_id], |r| {
                 Ok(Bucket {
                     name: r.get(0)?,
                     count: r.get(1)?,
@@ -135,19 +147,20 @@ pub fn summary_for(c: &Connection, scope_id: &str, hidden: bool) -> Result<Summa
         Ok(result)
     }
     Ok(Summary {
+        hidden_directories: crate::hidden::list(c)?,
         scan_runs: Vec::new(),
         scan_paused: false,
         facet_scope_id: scope_id.into(),
         facet_hidden: hidden,
         scopes: scopes(c)?,
-        total: c.query_row("SELECT COUNT(*) FROM entries WHERE hidden=0", [], |r| {
+        total: c.query_row("SELECT COUNT(*) FROM entries e JOIN directories d ON d.id=e.dir_id WHERE e.hidden=0 AND d.hidden=0", [], |r| {
             r.get(0)
         })?,
-        hidden: c.query_row("SELECT COUNT(*) FROM entries WHERE hidden=1", [], |r| {
+        hidden: c.query_row("SELECT COUNT(*) FROM entries e JOIN directories d ON d.id=e.dir_id WHERE e.hidden=1 OR d.hidden=1", [], |r| {
             r.get(0)
         })?,
         size: c.query_row(
-            "SELECT COALESCE(SUM(size),0) FROM entries WHERE hidden=0",
+            "SELECT COALESCE(SUM(size),0) FROM entries e JOIN directories d ON d.id=e.dir_id WHERE e.hidden=0 AND d.hidden=0",
             [],
             |r| r.get(0),
         )?,
@@ -158,8 +171,8 @@ pub fn summary_for(c: &Connection, scope_id: &str, hidden: bool) -> Result<Summa
     })
 }
 pub fn query(c: &Connection, q: &Query) -> Result<QueryResult> {
-    let mut conditions = vec!["e.hidden=?".to_string()];
-    let mut values: Vec<Value> = vec![Value::Integer(q.hidden as i64)];
+    let mut conditions = vec![visibility_sql(q.hidden).to_string()];
+    let mut values: Vec<Value> = vec![];
     if let Some(ids) = &q.candidate_ids {
         conditions.push("e.id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))".into());
         values.push(serde_json::to_string(ids)?.into());
@@ -213,14 +226,8 @@ pub fn query(c: &Connection, q: &Query) -> Result<QueryResult> {
         "FROM entries e JOIN directories d ON d.id=e.dir_id WHERE {}",
         conditions.join(" AND ")
     );
-    // Directory paths are only needed for name/path searches, not plain filtering.
-    let count_from = if q.search.is_empty() || q.search_mode == "content" {
-        format!("FROM entries e WHERE {}", conditions.join(" AND "))
-    } else {
-        from.clone()
-    };
     let total = c.query_row(
-        &format!("SELECT COUNT(*) {count_from}"),
+        &format!("SELECT COUNT(*) {from}"),
         params_from_iter(values.iter()),
         |r| r.get(0),
     )?;
@@ -235,9 +242,9 @@ pub fn query(c: &Connection, q: &Query) -> Result<QueryResult> {
     let limit = if q.limit == 0 { 100 } else { q.limit.min(500) };
     values.push(Value::Integer(limit as i64));
     values.push(Value::Integer(q.offset.min(i64::MAX as usize) as i64));
-    let sql=format!("SELECT e.id,e.name,d.path,e.native_name,e.extension,e.group_name,e.size,e.mtime,e.hidden,e.attributes,
+    let sql=format!("SELECT e.id,e.name,d.path,e.native_name,e.extension,e.group_name,e.size,e.mtime,(e.hidden OR d.hidden),e.attributes,
       (SELECT s.id FROM scopes s JOIN memberships m ON s.id=m.scope_id WHERE m.entry_id=e.id ORDER BY s.depth DESC,s.id LIMIT 1),
-      EXISTS(SELECT 1 FROM memberships m JOIN scopes s ON s.id=m.scope_id WHERE m.entry_id=e.id AND s.availability='available')
+      EXISTS(SELECT 1 FROM memberships m JOIN scopes s ON s.id=m.scope_id WHERE m.entry_id=e.id AND s.availability='available'),d.hidden
       {from} ORDER BY {sort} {direction},e.id ASC LIMIT ? OFFSET ?");
     let mut stmt = c.prepare(&sql)?;
     let mut rows = stmt.query(params_from_iter(values.iter()))?;
@@ -259,11 +266,13 @@ pub fn query(c: &Connection, q: &Query) -> Result<QueryResult> {
             name: r.get(1)?,
             path: display_path(&directory.join(native_name)),
             directory: scoped_directory(&scope_name, relative),
+            directory_path: display_path(&directory),
             extension: r.get(4)?,
             group: r.get(5)?,
             size: r.get(6)?,
             mtime: r.get(7)?,
             hidden: r.get(8)?,
+            directory_hidden: r.get(12)?,
             placeholder: placeholder(r.get::<_, u32>(9)?),
             scope_id,
             scope_name,
@@ -315,11 +324,39 @@ pub fn entry_path(c: &Connection, id: &str) -> Result<(PathBuf, String, u64, i64
     }
 }
 
-#[cfg(all(test, windows))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
+    fn v4_directory_migration_preserves_individual_hidden_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("index.sqlite");
+        let c = connect(&path).unwrap();
+        c.execute_batch("DROP INDEX directories_hidden; ALTER TABLE directories DROP COLUMN hidden;
+            DROP TABLE hidden_directories; PRAGMA user_version=4;
+            INSERT INTO directories(id,path,display) VALUES(1,x'01','old');
+            INSERT INTO entries(dir_id,native_name,name,extension,group_name,size,mtime,identity,attributes,hidden)
+                VALUES(1,x'01','old.txt','txt','文档',1,1,'test',0,1);").unwrap();
+        drop(c);
+        let c = connect(&path).unwrap();
+        assert_eq!(
+            c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            5
+        );
+        assert!(c
+            .query_row("SELECT hidden FROM entries", [], |r| r.get::<_, bool>(0))
+            .unwrap());
+        assert!(!c
+            .query_row("SELECT hidden FROM directories", [], |r| r
+                .get::<_, bool>(0))
+            .unwrap());
+        assert!(crate::hidden::list(&c).unwrap().is_empty());
+    }
+
+    #[test]
+    #[cfg(windows)]
     fn legacy_drive_scope_displays_normally_without_rewriting_native_paths() {
         let temp = tempfile::tempdir().unwrap();
         let c = connect(&temp.path().join("index.sqlite")).unwrap();

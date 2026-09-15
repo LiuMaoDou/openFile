@@ -3,6 +3,7 @@ mod db;
 mod deletion;
 mod everything;
 mod extract;
+mod hidden;
 pub mod model;
 mod moving;
 pub fn run_helper_if_requested() -> bool {
@@ -14,6 +15,7 @@ mod rules;
 mod scan;
 mod scan_entry;
 mod scan_gate;
+mod scan_issues;
 mod scan_progress;
 mod scan_schedule;
 mod watch;
@@ -80,6 +82,19 @@ impl Engine {
                 .context("缺少文件或文件夹 ID")
         };
         match command {
+            "scan_issues" => Ok(to_value(
+                self.scan_issues(
+                    id()?,
+                    args.get("offset")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0)
+                        .min(usize::MAX as u64) as usize,
+                    args.get("limit")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(50)
+                        .min(100) as usize,
+                )?,
+            )?),
             "content_status" => Ok(to_value(
                 self.content_status(args.get("scopeId").and_then(|v| v.as_str()).unwrap_or(""))?,
             )?),
@@ -114,13 +129,6 @@ impl Engine {
                 Ok(to_value(summary)?)
             }
             "performance" => Ok(to_value(self.performance()?)?),
-            "set_performance" => Ok(to_value(
-                self.set_performance(
-                    args.get("mode")
-                        .and_then(|v| v.as_str())
-                        .context("缺少性能模式")?,
-                )?,
-            )?),
             "query" => Ok(to_value(self.query(&serde_json::from_value(args)?)?)?),
             "add_scope" => Ok(json!({"id":self.add_scope(serde_json::from_value(args)?)?})),
             "update_scope" => {
@@ -151,6 +159,18 @@ impl Engine {
             }
             "cancel" => {
                 self.cancel(id()?)?;
+                Ok(json!(null))
+            }
+            "hide_directory" => {
+                self.hide_directory(Path::new(
+                    args.get("path")
+                        .and_then(|v| v.as_str())
+                        .context("缺少目录路径")?,
+                ))?;
+                Ok(json!(null))
+            }
+            "restore_directory" => {
+                self.restore_directory(id()?)?;
                 Ok(json!(null))
             }
             "set_hidden" => {
@@ -630,6 +650,12 @@ impl Engine {
         let mut c = self.lock()?;
         let tx = c.transaction()?;
         for id in ids {
+            if !hidden && tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM entries e JOIN directories d ON d.id=e.dir_id WHERE e.id=? AND d.hidden=1)",
+                [id], |r| r.get::<_, bool>(0),
+            )? {
+                bail!("选择中有文件随目录隐藏，请在“已隐藏”中打开“管理目录规则”，先恢复对应目录。");
+            }
             if tx.execute(
                 "UPDATE entries SET hidden=? WHERE id=?",
                 params![hidden, id],

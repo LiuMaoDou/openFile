@@ -137,7 +137,7 @@ impl Engine {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )?;
             if state != "planned" {
-                bail!("这批删除已提交，请查看删除记录，不要重复执行。");
+                bail!("这批删除已提交，请核对当前操作结果，不要重复执行。");
             }
             if expires < now() {
                 bail!("删除预览已过期，请重新选择文件并预览。");

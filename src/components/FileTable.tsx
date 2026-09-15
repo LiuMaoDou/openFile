@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ArrowDown,
@@ -14,6 +14,7 @@ import {
 import type { Entry, Query, QueryResult } from "../types";
 import { FileIcon, formatDate, formatSize } from "./FileIcon";
 interface Props {
+  scopeCount: number;
   result: QueryResult;
   query: Query;
   change: (patch: Partial<Query>) => void;
@@ -26,6 +27,7 @@ interface Props {
   loading: boolean;
 }
 export function FileTable({
+  scopeCount,
   result,
   query,
   change,
@@ -41,14 +43,10 @@ export function FileTable({
   const virtualizer = useVirtualizer({
     count: result.entries.length,
     getScrollElement: () => scroll.current,
-    estimateSize: () => (query.searchMode !== "name" && query.search ? 76 : 52),
+    estimateSize: () => 42,
     overscan: 8,
     getItemKey: (index) => result.entries[index].id,
   });
-  const showSnippets = query.searchMode !== "name" && !!query.search;
-  useEffect(() => {
-    virtualizer.measure();
-  }, [virtualizer, showSnippets]);
   const anchor = useRef<string | undefined>(undefined);
   const columns = [
     { key: "name", label: "文件名" },
@@ -286,6 +284,7 @@ export function FileTable({
       </div>
       <div className="pagination">
         <span>
+          {scopeCount.toLocaleString()} 个文件夹 ·{" "}
           {result.total.toLocaleString()} 个文件
           {result.total > query.limit
             ? ` · 第 ${Math.floor(query.offset / query.limit) + 1} / ${Math.ceil(result.total / query.limit)} 页`
