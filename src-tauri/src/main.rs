@@ -24,7 +24,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let engine = Engine::open(app.path().app_local_data_dir()?.join("index/index.sqlite"))?;
+            let engine = Engine::open_managed(app.path().app_local_data_dir()?)?;
             app.manage(engine);
             Ok(())
         })

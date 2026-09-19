@@ -2,15 +2,15 @@
 
 按用户指定的盘或文件夹聚合相同扩展名文件。索引、筛选和隐藏只改变本地视图，源文件保持原位。
 
-当前版本：**0.1.11 开发验证版**。Rust + SQLite 核心、React 界面与 Tauri 2 桌面壳已实现；Windows 实机验证仍待执行，不能视为 M0/M1 全量验收通过。
+当前版本：**0.1.12 开发验证版**。Rust + SQLite 核心、React 界面与 Tauri 2 桌面壳已实现；Windows 实机验证仍待执行，不能视为 M0/M1 全量验收通过。
 
 ## Windows 直接运行
 
 从 **0.1.11** 开始，仅发布 **Windows x64 安装版与便携版**。不再为新版本上传 Mac 安装文件；[0.1.10 及更早版本的 Mac 下载](https://github.com/LiuMaoDou/openFile/releases/tag/v0.1.10)保留在历史 Releases。
 
-**[下载 Windows 安装版](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.11/FileM_0.1.11_x64-setup.exe)** · **[下载免安装 ZIP](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.11/FileM-0.1.11-windows-x64-portable.zip)** · [版本说明与校验值](https://github.com/LiuMaoDou/openFile/releases/tag/v0.1.11)
+**[下载 Windows 安装版](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.12/FileM_0.1.12_x64-setup.exe)** · **[下载免安装 ZIP](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.12/FileM-0.1.12-windows-x64-portable.zip)** · [版本说明与校验值](https://github.com/LiuMaoDou/openFile/releases/tag/v0.1.12)
 
-Windows 11 x64 用户可运行 `FileM_0.1.11_x64-setup.exe`，或完整解压 `FileM-0.1.11-windows-x64-portable.zip` 后双击 `FileM.exe`。使用者无需安装 Node.js、Rust 或 Visual Studio。免安装包使用系统 WebView2；安装版会在缺少该运行时时联网安装。使用步骤和版本边界见 [Windows 使用说明](docs/Windows_使用说明.md) 与 [0.1.4 内容搜索更新说明](docs/Windows_0.1.4_更新说明.md)；此前修复见 [0.1.3 修复与验证记录](docs/Windows_0.1.3_修复记录.md) 和 [代码复查](docs/Windows_0.1.3_代码复查.md)。分发包通过 GitHub Releases 下载，构建产物不纳入源码版本控制。Release 页面中的 Source code 是源码压缩包，不能直接双击运行；Packages 栏目不用于此应用的安装包分发。
+Windows 11 x64 用户可运行 `FileM_0.1.12_x64-setup.exe`，或完整解压 `FileM-0.1.12-windows-x64-portable.zip` 后双击 `FileM.exe`。使用者无需安装 Node.js、Rust 或 Visual Studio。免安装包使用系统 WebView2；安装版会在缺少该运行时时联网安装。使用步骤和版本边界见 [Windows 使用说明](docs/Windows_使用说明.md) 、[0.1.12 索引存储更新说明](docs/0.1.12_更新说明.md) 与 [0.1.4 内容搜索更新说明](docs/Windows_0.1.4_更新说明.md)；此前修复见 [0.1.3 修复与验证记录](docs/Windows_0.1.3_修复记录.md) 和 [代码复查](docs/Windows_0.1.3_代码复查.md)。分发包通过 GitHub Releases 下载，构建产物不纳入源码版本控制。Release 页面中的 Source code 是源码压缩包，不能直接双击运行；Packages 栏目不用于此应用的安装包分发。
 
 ## 外观主题
 
@@ -118,6 +118,12 @@ macOS 使用本地索引。Everything 的候选路径、授权检查和回退有
 浏览器开发模式默认写入 `.filem/index/index.sqlite`；示例文件在 `.filem/示例资料`。可用 `FILEM_DATA_DIR` 指定独立的开发数据目录。
 
 桌面模式使用 Tauri 的应用本地数据目录，应用标识为 `local.filem.desktop`；它与浏览器开发数据独立。任何模式均不会自动扫描用户目录或整机磁盘。
+
+左下角 **索引存储** 可查看当前索引完整路径、数据库和写入日志（WAL）的大小，点击 **定位索引文件** 可在系统文件管理器中选中索引文件。
+
+需要更换磁盘时，在 **新的存放文件夹** 中选择专门存放索引的空文件夹（不要选择资料文件夹或整个磁盘，索引目录不参与扫描），点击 **保存，下次启动生效**，然后退出并重新打开 FileM。本次运行和扫描仍使用原位置；下次启动先迁移包含 WAL 的完整索引并校验，再从新位置开始扫描。监控文件夹、隐藏规则、设置和内容索引均保留，重启前可 **取消切换**。目标不可写、已有索引、身份变化或迁移失败时不会覆盖目标文件，仍使用原位置，并在“索引存储”显示原因。
+
+迁移后旧索引副本会保留，**不会立即释放原磁盘空间**。可通过 **定位旧索引** 查看；确认新位置使用正常后，退出 FileM 再清理旧位置的 `index.sqlite`、`index.sqlite-wal`、`index.sqlite-shm`。不要删除整个应用数据目录：其中的小型 `storage.sqlite` 保存当前/待切换位置，仍需保留。若当前索引所在磁盘离线或文件丢失，应用报错而不会悄悄新建空白文件库，请连接磁盘或恢复文件后重启。
 
 索引保存原生路径编码、文件身份和目录引用，前端传递文件 ID。文本预览会检查根目录授权、当前文件身份、大小和修改时间，再读取内容；拒绝符号链接与已识别的云占位文件。
 

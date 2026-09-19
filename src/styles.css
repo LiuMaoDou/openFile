@@ -841,6 +841,108 @@ main {
   background: var(--overlay);
   backdrop-filter: blur(2px);
 }
+.index-storage-dialog {
+  width: min(640px, calc(100vw - 32px));
+}
+.index-storage-body {
+  max-height: 65dvh;
+  overflow-y: auto;
+}
+.index-storage-body h3 {
+  font-size: 13px;
+  margin-bottom: 10px;
+}
+.index-storage-path {
+  overflow-wrap: anywhere;
+  user-select: text;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.index-storage-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 14px;
+}
+.index-storage-actions .text-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.index-storage-sizes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 22px 0;
+}
+.index-storage-sizes dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+.index-storage-sizes dd {
+  margin: 6px 0 0;
+  font-size: 17px;
+  font-weight: 600;
+}
+.index-storage-pending,
+.index-storage-previous {
+  padding: 16px;
+  margin: 16px 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.index-storage-pending > p:not(.index-storage-path),
+.index-storage-previous > p:not(.index-storage-path) {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+  margin: 10px 0;
+}
+.index-storage-form {
+  border-top: 1px solid var(--border);
+  padding-top: 18px;
+  margin-top: 18px;
+}
+.index-directory-picker {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 46px;
+  padding: 12px;
+  width: 100%;
+  border: 1px solid var(--border-strong);
+  background: var(--input);
+  color: var(--muted);
+  font-size: 13px;
+  text-align: left;
+}
+.index-directory-picker > span:first-of-type {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.index-directory-picker.has-selection {
+  color: var(--text);
+}
+.index-directory-picker:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--hover);
+}
+.index-directory-picker-action {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+.index-storage-form .field-hint {
+  line-height: 1.7;
+  margin: 12px 0 16px;
+}
+.index-storage-message {
+  margin-top: 16px;
+  font-size: 13px;
+  line-height: 1.6;
+}
 .dialog-header {
   display: flex;
   justify-content: space-between;

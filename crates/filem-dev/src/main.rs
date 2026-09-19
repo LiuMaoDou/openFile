@@ -10,6 +10,7 @@ use filem_core::Engine;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{path::PathBuf, sync::Arc};
+mod directory_picker;
 
 #[derive(Clone)]
 struct App {
@@ -38,21 +39,26 @@ async fn command(
     State(app): State<App>,
     Json(input): Json<Command>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    tokio::task::spawn_blocking(move || app.engine.dispatch(&input.command, input.args))
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error":format!("{e:#}")})),
-            )
-        })?
-        .map(Json)
-        .map_err(|e| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error":format!("{e:#}")})),
-            )
-        })
+    tokio::task::spawn_blocking(move || {
+        if input.command == "pick_directory" {
+            return Ok(serde_json::to_value(directory_picker::pick()?)?);
+        }
+        app.engine.dispatch(&input.command, input.args)
+    })
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error":format!("{e:#}")})),
+        )
+    })?
+    .map(Json)
+    .map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":format!("{e:#}")})),
+        )
+    })
 }
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -62,7 +68,7 @@ async fn main() -> anyhow::Result<()> {
     let token =
         std::env::var("FILEM_DEV_TOKEN").expect("请通过 npm run dev 启动，以创建本次会话令牌。");
     let dir = PathBuf::from(std::env::var("FILEM_DATA_DIR").unwrap_or_else(|_| ".filem".into()));
-    let engine = Engine::open(dir.join("index/index.sqlite"))?;
+    let engine = Engine::open_managed(dir)?;
     let state = App {
         engine,
         token: Arc::new(token),

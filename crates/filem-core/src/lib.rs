@@ -18,6 +18,7 @@ mod scan_gate;
 mod scan_issues;
 mod scan_progress;
 mod scan_schedule;
+mod storage;
 mod watch;
 #[cfg(windows)]
 mod windows_shell;
@@ -63,6 +64,7 @@ struct Inner {
     scan_scheduler: scan_schedule::Scheduler,
     scan_runs: Mutex<scan_progress::Registry>,
     scan_requests: Mutex<()>,
+    managed_storage: Option<storage::ManagedStorage>,
 }
 pub(crate) struct Control {
     sender: SyncSender<()>,
@@ -82,6 +84,27 @@ impl Engine {
                 .context("缺少文件或文件夹 ID")
         };
         match command {
+            "index_storage" => Ok(to_value(self.index_storage()?)?),
+            "set_index_location" => {
+                self.set_index_location(
+                    args.get("path")
+                        .and_then(|v| v.as_str())
+                        .context("缺少目标文件夹")?,
+                )?;
+                Ok(to_value(self.index_storage()?)?)
+            }
+            "cancel_index_location" => {
+                self.cancel_index_location()?;
+                Ok(to_value(self.index_storage()?)?)
+            }
+            "reveal_index" => {
+                self.reveal_index(
+                    args.get("previous")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                )?;
+                Ok(json!(null))
+            }
             "scan_issues" => Ok(to_value(
                 self.scan_issues(
                     id()?,
@@ -275,7 +298,12 @@ impl Engine {
         })
     }
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        let path = path.as_ref();
+        Self::open_with_storage(path.as_ref(), None)
+    }
+    fn open_with_storage(
+        path: &Path,
+        managed_storage: Option<storage::ManagedStorage>,
+    ) -> Result<Self> {
         fs::create_dir_all(path.parent().unwrap_or(Path::new(".")))?;
         let storage = path.parent().unwrap_or(Path::new(".")).canonicalize()?;
         let index_lock = fs::OpenOptions::new()
@@ -317,6 +345,7 @@ impl Engine {
                 scan_scheduler: scan_schedule::Scheduler::default(),
                 scan_runs: Mutex::new(scan_progress::Registry::default()),
                 scan_requests: Mutex::new(()),
+                managed_storage,
             }),
         };
         engine.configure_performance()?;

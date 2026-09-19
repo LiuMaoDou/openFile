@@ -20,7 +20,7 @@ export async function command<T>(
   return result as T;
 }
 export async function pickDirectory(): Promise<string | null> {
-  if (!isDesktop()) return null;
+  if (!isDesktop()) return command<string | null>("pick_directory");
   const { open } = await import("@tauri-apps/plugin-dialog");
   const result = await open({
     directory: true,

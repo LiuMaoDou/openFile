@@ -25,6 +25,7 @@ import { MoveDialog } from "./components/MoveDialog";
 import { ScanStatus } from "./components/ScanStatus";
 import { DeleteDialog } from "./components/DeleteDialog";
 import { HiddenDirectoriesDialog } from "./components/HiddenDirectoriesDialog";
+import { IndexStorageDialog } from "./components/IndexStorageDialog";
 
 export default function App() {
   const [query, setQuery] = useState<Query>(DEFAULT_QUERY);
@@ -32,6 +33,7 @@ export default function App() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [active, setActive] = useState<Entry | null>(null);
   const [dialog, setDialog] = useState<{ scope?: Scope } | null>(null);
+  const [storageOpen, setStorageOpen] = useState(false);
   const [hiddenDirectoryDialog, setHiddenDirectoryDialog] = useState<{
     path: string;
   } | null>(null);
@@ -167,6 +169,7 @@ export default function App() {
         />
       )}
       <Sidebar
+        storage={() => setStorageOpen(true)}
         summary={summary}
         query={query}
         change={change}
@@ -524,6 +527,9 @@ export default function App() {
           changed={changedScopes}
           notify={notify}
         />
+      )}
+      {storageOpen && (
+        <IndexStorageDialog close={() => setStorageOpen(false)} />
       )}
       {hiddenDirectoryDialog && (
         <HiddenDirectoriesDialog

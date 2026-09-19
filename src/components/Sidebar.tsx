@@ -12,6 +12,7 @@ import {
   PencilRuler,
   Plus,
   Settings2,
+  Database,
   X,
 } from "lucide-react";
 import { scanLabel } from "./ScanStatus";
@@ -47,6 +48,7 @@ interface Props {
   edit: (scope: Scope) => void;
   mobileOpen: boolean;
   close: () => void;
+  storage: () => void;
 }
 export function Sidebar({
   summary,
@@ -56,6 +58,7 @@ export function Sidebar({
   edit,
   mobileOpen,
   close,
+  storage,
 }: Props) {
   const navigate = (patch: Partial<Query>) => {
     change(patch);
@@ -184,6 +187,16 @@ export function Sidebar({
         </section>
       </nav>
       <div className="sidebar-footer">
+        <button
+          className="nav-item"
+          onClick={() => {
+            close();
+            storage();
+          }}
+        >
+          <Database size={18} />
+          <span>索引存储</span>
+        </button>
         <ThemeControl />
         <div className="sidebar-version" aria-label={`FileM 版本 ${version}`}>
           FileM v{version}
