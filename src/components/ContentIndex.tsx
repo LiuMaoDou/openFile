@@ -98,7 +98,8 @@ export function ContentIndex({
           <p>
             文字仅保存在本机。支持文本、代码、带文字层的
             PDF、DOCX、XLSX、PPTX；扫描图片暂不支持 OCR。单文件上限 64
-            MiB，最多提取 2 MiB 文字。
+            MiB，最多提取 32 MiB
+            文字。旧版截断的文档和缺少词索引的文档会自动补建，暂停的文件夹在继续后补建。
           </p>
           {data?.scopes.map((s) => (
             <div className="content-folder" key={s.id}>

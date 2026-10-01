@@ -107,6 +107,7 @@ export interface ScanRun {
 }
 export interface Query {
   searchMode: "name" | "content" | "all";
+  matchMode: "exact" | "keywords";
   search: string;
   scopeId: string;
   extension: string;
@@ -152,6 +153,7 @@ export interface DeletePlan {
 }
 export const DEFAULT_QUERY: Query = {
   searchMode: "name",
+  matchMode: "exact",
   search: "",
   scopeId: "",
   extension: "",

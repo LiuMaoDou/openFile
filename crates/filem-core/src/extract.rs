@@ -5,13 +5,26 @@ use calamine::Reader as WorkbookReader;
 use quick_xml::{events::Event, Reader};
 use serde::{Deserialize, Serialize};
 use std::{
+    borrow::Cow,
     fs,
     io::{Cursor, Read},
     path::PathBuf,
 };
 
 pub const MAX_FILE: u64 = 64 * 1024 * 1024;
-pub const MAX_TEXT: usize = 2 * 1024 * 1024;
+pub const MAX_TEXT: usize = 32 * 1024 * 1024;
+const TEXT_FRAME: usize = 256 * 1024;
+const REPLY_HEADER_LIMIT: usize = 16 * 1024;
+
+// Worst-case UTF-8 expansion for supported plain-text encodings. Office/PDF
+// input sizes do not bound their extracted text, so reserve the full allowance.
+pub(crate) fn text_budget(size: u64, ext: &str) -> usize {
+    if text_type(ext) {
+        size.saturating_mul(3).min(MAX_TEXT as u64) as usize
+    } else {
+        MAX_TEXT
+    }
+}
 #[derive(Serialize, Deserialize)]
 pub(crate) struct Request {
     pub path: Vec<u8>,
@@ -77,6 +90,9 @@ fn text_type(ext: &str) -> bool {
 }
 impl Extracted {
     fn append(&mut self, text: &str) {
+        if self.truncated {
+            return;
+        }
         let remaining = MAX_TEXT.saturating_sub(self.text.len());
         let mut n = text.len().min(remaining);
         while !text.is_char_boundary(n) {
@@ -86,25 +102,25 @@ impl Extracted {
         self.truncated |= n < text.len();
     }
 }
-fn decode_text(bytes: &[u8]) -> Result<(String, Option<String>)> {
+fn decode_text(bytes: &[u8]) -> Result<(Cow<'_, str>, Option<String>)> {
     if let Some((encoding, skip)) = encoding_rs::Encoding::for_bom(bytes) {
         let (text, errors) = encoding.decode_without_bom_handling(&bytes[skip..]);
         if errors {
             bail!("文本编码损坏，无法可靠解码");
         }
-        return Ok((text.into_owned(), None));
+        return Ok((text, None));
     }
     if bytes.contains(&0) {
         bail!("检测到二进制内容或无 BOM 的 UTF-16，请另存为 UTF-8 后重试");
     }
     if let Ok(text) = std::str::from_utf8(bytes) {
-        return Ok((text.into(), None));
+        return Ok((Cow::Borrowed(text), None));
     }
     let (text, errors) = encoding_rs::GBK.decode_without_bom_handling(bytes);
     if errors {
         bail!("无法识别文本编码，支持 UTF-8、带 BOM 的 UTF-16 和 GBK");
     }
-    Ok((text.into_owned(), Some("按 GBK 解码".into())))
+    Ok((text, Some("按 GBK 解码".into())))
 }
 fn validate_zip(bytes: &[u8]) -> Result<()> {
     let mut zip = zip::ZipArchive::new(Cursor::new(bytes))?;
@@ -270,12 +286,23 @@ pub(crate) fn parse(bytes: &[u8], ext: &str) -> Result<Extracted> {
         }
     }
     // NUL cannot be searched reliably by SQLite text functions.
-    out.text = out.text.replace('\0', " ");
+    if out.text.contains('\0') {
+        let mut bytes = out.text.into_bytes();
+        for byte in &mut bytes {
+            if *byte == 0 {
+                *byte = b' ';
+            }
+        }
+        out.text = String::from_utf8(bytes)?;
+    }
     if out.text.trim().is_empty() {
         bail!("未提取到文字；空文档或扫描版 PDF 暂不可搜索，OCR 尚未启用");
     }
     if out.truncated {
-        out.note = Some("内容过长，仅索引前 2 MiB 文字".into());
+        out.note = Some(format!(
+            "内容过长，仅索引前 {} MiB 文字",
+            MAX_TEXT / 1024 / 1024
+        ));
     }
     Ok(out)
 }
@@ -319,6 +346,59 @@ fn extract_file(request: &Request) -> Result<Extracted> {
 struct Reply {
     output: Option<Extracted>,
     error: Option<String>,
+}
+#[derive(Serialize, Deserialize)]
+struct ReplyHeader {
+    text_len: Option<usize>,
+    truncated: bool,
+    note: Option<String>,
+    error: Option<String>,
+}
+
+// Only small metadata is JSON. Raw UTF-8 frames avoid escaping and a second
+// document-sized JSON allocation (up to six times larger for control bytes).
+fn write_reply(writer: &mut impl std::io::Write, reply: Reply) -> Result<()> {
+    let header = ReplyHeader {
+        text_len: reply.output.as_ref().map(|v| v.text.len()),
+        truncated: reply.output.as_ref().is_some_and(|v| v.truncated),
+        note: reply.output.as_ref().and_then(|v| v.note.clone()),
+        error: reply.error,
+    };
+    let bytes = serde_json::to_vec(&header)?;
+    if bytes.len() > REPLY_HEADER_LIMIT {
+        bail!("解析元数据超过限制");
+    }
+    write_frame(writer, &bytes)?;
+    if let Some(output) = reply.output {
+        for chunk in output.text.as_bytes().chunks(TEXT_FRAME) {
+            write_frame(writer, chunk)?;
+        }
+    }
+    Ok(())
+}
+
+fn read_reply(reader: &mut impl Read) -> Result<Extracted> {
+    let header: ReplyHeader = serde_json::from_slice(&read_frame(reader, REPLY_HEADER_LIMIT)?)?;
+    let len = header
+        .text_len
+        .context(header.error.unwrap_or_else(|| "文档解析失败".into()))?;
+    if len > MAX_TEXT {
+        bail!("文档解析结果过长");
+    }
+    let mut bytes = vec![0; len];
+    for chunk in bytes.chunks_mut(TEXT_FRAME) {
+        let mut size = [0; 4];
+        reader.read_exact(&mut size)?;
+        if u32::from_le_bytes(size) as usize != chunk.len() {
+            bail!("解析文字分块长度无效");
+        }
+        reader.read_exact(chunk)?;
+    }
+    Ok(Extracted {
+        text: String::from_utf8(bytes).context("解析文字不是有效 UTF-8")?,
+        truncated: header.truncated,
+        note: header.note,
+    })
 }
 fn read_frame(reader: &mut impl Read, limit: usize) -> Result<Vec<u8>> {
     let mut size = [0u8; 4];
@@ -372,7 +452,7 @@ pub(crate) fn run_helper_if_requested() -> bool {
                 },
             };
             if stream {
-                write_frame(&mut output, &serde_json::to_vec(&reply)?)?;
+                write_reply(&mut output, reply)?;
             } else {
                 serde_json::to_writer(&mut output, &reply)?;
                 return Ok(());
@@ -386,7 +466,7 @@ pub(crate) fn run_helper_if_requested() -> bool {
 struct Parser {
     child: std::process::Child,
     input: std::process::ChildStdin,
-    replies: Option<std::sync::mpsc::Receiver<Result<Vec<u8>>>>,
+    replies: Option<std::sync::mpsc::Receiver<Result<Extracted>>>,
     reader: Option<std::thread::JoinHandle<()>>,
     used: usize,
 }
@@ -421,7 +501,7 @@ impl Parser {
         let mut output = child.stdout.take().context("解析输出不可用")?;
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         let reader = std::thread::spawn(move || loop {
-            let frame = read_frame(&mut output, MAX_TEXT * 6 + 8192);
+            let frame = read_reply(&mut output);
             let failed = frame.is_err();
             if sender.send(frame).is_err() || failed {
                 break;
@@ -445,7 +525,7 @@ impl Parser {
         }
         write_frame(&mut self.input, &serde_json::to_vec(request)?)?;
         let deadline = Instant::now() + Duration::from_secs(30);
-        let bytes = loop {
+        let result = loop {
             // Replies wake immediately; the timeout only checks cancellation and
             // memory, so small documents no longer wait in 50-ms polling steps.
             match self
@@ -468,12 +548,8 @@ impl Parser {
         if parser_memory_exceeded(self.child.id()) {
             bail!("解析内存超过 512 MiB");
         }
-        let reply: Reply = serde_json::from_slice(&bytes).context("文档解析结果无效")?;
-        let result = reply
-            .output
-            .context(reply.error.unwrap_or_else(|| "文档解析失败".into()))?;
-        if result.text.len() > MAX_TEXT {
-            bail!("文档解析结果过长");
+        if Instant::now() >= deadline || !valid() {
+            bail!("内容提取已停止或超过 30 秒限制");
         }
         self.used += 1;
         Ok(result)
@@ -659,5 +735,86 @@ mod tests {
         assert!(parse(&archive(&[("not-a-document.txt", "fake")]), "docx").is_err());
         assert!(parse(b"broken zip", "docx").is_err());
         assert!(parse(b"broken PDF", "pdf").is_err());
+    }
+    #[test]
+    fn raw_reply_frames_preserve_utf8_controls_and_request_boundaries() {
+        let text = format!(
+            "{}中\"\\\n{}尾部标记",
+            "a".repeat(TEXT_FRAME - 1),
+            "汉\t".repeat(TEXT_FRAME)
+        );
+        let mut wire = Vec::new();
+        for text in [&text, "second request"] {
+            write_reply(
+                &mut wire,
+                Reply {
+                    output: Some(Extracted {
+                        text: text.into(),
+                        truncated: false,
+                        note: Some("按 GBK 解码".into()),
+                    }),
+                    error: None,
+                },
+            )
+            .unwrap();
+        }
+        assert!(wire.len() < text.len() + 1024);
+        let mut reader = Cursor::new(wire);
+        let first = read_reply(&mut reader).unwrap();
+        assert_eq!(first.text, text);
+        assert_eq!(first.note.as_deref(), Some("按 GBK 解码"));
+        assert_eq!(read_reply(&mut reader).unwrap().text, "second request");
+    }
+
+    #[test]
+    fn raw_reply_rejects_oversized_partial_and_invalid_frames() {
+        let header = |size| {
+            serde_json::to_vec(&ReplyHeader {
+                text_len: Some(size),
+                truncated: false,
+                note: None,
+                error: None,
+            })
+            .unwrap()
+        };
+        let mut wire = Vec::new();
+        write_frame(&mut wire, &header(MAX_TEXT + 1)).unwrap();
+        assert!(read_reply(&mut Cursor::new(wire))
+            .unwrap_err()
+            .to_string()
+            .contains("过长"));
+        for payload in [vec![], vec![1, 0, 0, 0, 255], vec![2, 0, 0, 0, b'a', b'b']] {
+            let mut wire = Vec::new();
+            write_frame(&mut wire, &header(1)).unwrap();
+            wire.extend(payload);
+            assert!(read_reply(&mut Cursor::new(wire)).is_err());
+        }
+    }
+
+    #[test]
+    fn large_encoded_text_and_office_keep_content_after_old_limit() {
+        let text = format!("{}合同末尾 unique-tail", "正文内容".repeat(190_000));
+        assert!(text.len() > 2 * 1024 * 1024);
+        let utf16 = [
+            vec![255, 254],
+            text.encode_utf16().flat_map(u16::to_le_bytes).collect(),
+        ]
+        .concat();
+        for bytes in [
+            text.as_bytes().to_vec(),
+            encoding_rs::GBK.encode(&text).0.into_owned(),
+            utf16,
+        ] {
+            let result = parse(&bytes, "txt").unwrap();
+            assert_eq!(result.text, text);
+            assert!(!result.truncated);
+            assert!(result.text.len() <= text_budget(bytes.len() as u64, "txt"));
+        }
+        let xml = format!(
+            "<w:document xmlns:w=\"w\"><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:document>"
+        );
+        let result = parse(&archive(&[("word/document.xml", &xml)]), "docx").unwrap();
+        assert!(result.text.contains("合同末尾 unique-tail"));
+        assert!(!result.truncated);
     }
 }

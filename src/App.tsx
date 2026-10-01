@@ -243,15 +243,31 @@ export default function App() {
                 <option value="content">文件内容</option>
                 <option value="all">文件名 + 内容</option>
               </select>
+              <select
+                aria-label="匹配方式"
+                value={query.matchMode}
+                onChange={(e) =>
+                  change({
+                    matchMode: e.target.value as Query["matchMode"],
+                    sort: e.target.value === "keywords" ? "relevance" : "name",
+                    descending: false,
+                  })
+                }
+              >
+                <option value="exact">精确匹配</option>
+                <option value="keywords">关键词匹配</option>
+              </select>
               <label className="search-field">
                 <Search size={18} />
                 <input
                   aria-label="搜索关键词"
                   maxLength={512}
                   placeholder={
-                    query.searchMode === "name"
-                      ? "搜索文件名或路径"
-                      : "输入内容关键词或完整短语"
+                    query.matchMode === "keywords"
+                      ? "全部词都匹配，如：合同 付款"
+                      : query.searchMode === "name"
+                        ? "搜索文件名或路径"
+                        : "输入内容关键词或完整短语"
                   }
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
@@ -266,6 +282,22 @@ export default function App() {
                   </button>
                 )}
               </label>
+              {query.matchMode === "keywords" && (
+                <select
+                  aria-label="结果排序"
+                  value={query.sort}
+                  onChange={(e) =>
+                    change({ sort: e.target.value, descending: false })
+                  }
+                >
+                  <option value="relevance">相关度优先</option>
+                  <option value="name">文件名排序</option>
+                  <option value="size">大小排序</option>
+                  <option value="mtime">修改时间排序</option>
+                  <option value="extension">类型排序</option>
+                  <option value="directory">目录排序</option>
+                </select>
+              )}
               <select
                 aria-label="文件夹筛选"
                 value={query.scopeId}
@@ -506,7 +538,11 @@ export default function App() {
           </main>
           {selectedActive && (
             <Inspector
-              search={query.search}
+              search={
+                query.matchMode === "keywords"
+                  ? selectedActive.snippet?.matched || query.search
+                  : query.search
+              }
               key={selectedActive.id}
               entry={selectedActive}
               close={() => setActive(null)}

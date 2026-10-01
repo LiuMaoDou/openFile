@@ -1,9 +1,47 @@
 //! Durable per-folder content indexing. FTS and file references share transactions.
 use crate::{db, extract, model::*, platform::*, Engine};
 use anyhow::{bail, Context, Result};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
-use std::{sync::Arc, thread, time::Duration};
+use std::{
+    sync::{Arc, Condvar, Mutex},
+    thread,
+    time::Duration,
+};
+
+// Reserve original text plus at most three bytes of encoded tokens per byte.
+const CONTENT_BUFFER_BUDGET: usize = 128 * 1024 * 1024;
+const COMMIT_TEXT_BUDGET: usize = 8 * 1024 * 1024;
+
+#[derive(Default)]
+struct ContentBudget {
+    used: Mutex<usize>,
+    available: Condvar,
+}
+struct ContentPermit {
+    budget: Arc<ContentBudget>,
+    bytes: usize,
+}
+impl ContentBudget {
+    fn reserve(self: &Arc<Self>, bytes: usize) -> ContentPermit {
+        assert!(bytes <= CONTENT_BUFFER_BUDGET);
+        let mut used = self.used.lock().unwrap();
+        while *used + bytes > CONTENT_BUFFER_BUDGET {
+            used = self.available.wait(used).unwrap();
+        }
+        *used += bytes;
+        ContentPermit {
+            budget: self.clone(),
+            bytes,
+        }
+    }
+}
+impl Drop for ContentPermit {
+    fn drop(&mut self) {
+        *self.budget.used.lock().unwrap() -= self.bytes;
+        self.budget.available.notify_all();
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -76,6 +114,22 @@ pub(crate) fn migrate(c: &Connection) -> Result<()> {
           CREATE TRIGGER IF NOT EXISTS content_scope_disabled AFTER UPDATE OF content_enabled ON scopes WHEN new.content_enabled=0 BEGIN
             DELETE FROM content_items WHERE NOT EXISTS (SELECT 1 FROM memberships m JOIN scopes s ON s.id=m.scope_id WHERE m.entry_id=content_items.entry_id AND s.content_enabled=1); END;
           ")?;
+        c.execute_batch("CREATE VIRTUAL TABLE IF NOT EXISTS content_words USING fts5(tokens,content='',contentless_delete=1);
+          CREATE TRIGGER IF NOT EXISTS content_words_delete AFTER DELETE ON content_items BEGIN
+            DELETE FROM content_words WHERE rowid=old.entry_id; END;
+          CREATE TRIGGER IF NOT EXISTS content_words_update AFTER UPDATE OF text ON content_items BEGIN
+            DELETE FROM content_words WHERE rowid=old.entry_id; END;")?;
+        let content_columns = c
+            .prepare("PRAGMA table_info(content_items)")?
+            .query_map([], |r| r.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        if !content_columns.iter().any(|name| name == "text_limit") {
+            // Additive metadata remains readable by old v5 clients. Keep old
+            // prefixes searchable until their replacement commits successfully.
+            c.execute_batch(
+                "ALTER TABLE content_items ADD COLUMN text_limit INTEGER NOT NULL DEFAULT 2097152;",
+            )?;
+        }
         let version: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if version < 4 {
             c.execute_batch("PRAGMA user_version=4;")?;
@@ -97,6 +151,29 @@ pub(crate) fn match_sql(query: &Query, values: &mut Vec<rusqlite::types::Value>)
     conditions.push("EXISTS(SELECT 1 FROM memberships cm JOIN scopes cs ON cs.id=cm.scope_id WHERE cm.entry_id=e.id AND cs.content_enabled=1 AND (?='' OR cs.id=?))".into());
     values.push(query.scope_id.clone().into());
     values.push(query.scope_id.clone().into());
+    if query.match_mode == "keywords" {
+        let terms = crate::search::terms(&query.search);
+        if terms.is_empty() {
+            conditions.push("0".into());
+        } else {
+            values.push(crate::search::expression(&terms).into());
+            // Literal term fallback keeps compound words and technical substrings
+            // searchable when dictionary boundaries differ or backfill is pending.
+            let literal = terms
+                .iter()
+                .map(|term| {
+                    values.push(term.clone().into());
+                    "instr(lower(ci.text),lower(?))>0"
+                })
+                .collect::<Vec<_>>()
+                .join(" AND ");
+            conditions.push(format!("(ci.entry_id IN (SELECT rowid FROM content_words WHERE content_words MATCH ?) OR ({literal}))"));
+        }
+        return format!(
+            "EXISTS(SELECT 1 FROM content_items ci WHERE {})",
+            conditions.join(" AND ")
+        );
+    }
     // FTS5 trigram cannot match one or two characters; those use the stored text.
     if query.search.chars().count() >= 3 {
         conditions.push(
@@ -145,6 +222,9 @@ struct PreparedContent {
     job: Job,
     initial: (std::path::PathBuf, String, u64, i64, u32),
     output: Result<extract::Extracted>,
+    keywords: Option<String>,
+    words_only: bool,
+    permit: Option<ContentPermit>,
 }
 impl Engine {
     pub(crate) fn start_content_worker(&self) {
@@ -160,6 +240,7 @@ impl Engine {
                 .unwrap();
             let mut after_id = 0i64;
             let mut exhausted_revision = None;
+            let budget = Arc::new(ContentBudget::default());
             loop {
                 let Some(inner) = weak.upgrade() else {
                     break;
@@ -201,17 +282,37 @@ impl Engine {
                     continue;
                 }
                 after_id = jobs.last().and_then(|j| j.id.parse().ok()).unwrap_or(0);
-                // Limit extracted text awaiting a commit to 8 * MAX_TEXT, while
-                // keeping the configured parser workers alive across batches.
-                for chunk in jobs.chunks(8) {
-                    let prepared: Vec<_> = pool.install(|| {
-                        chunk
-                            .par_iter()
-                            .filter_map(|job| engine.prepare_content_job(job).ok().flatten())
-                            .collect()
+                // Reserve bytes before parsing and retain the permit through
+                // commit. A slow large document no longer holds up ready ones.
+                thread::scope(|scope| {
+                    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+                    let engine = &engine;
+                    let pool = &pool;
+                    let budget = &budget;
+                    scope.spawn(move || {
+                        pool.install(|| {
+                            jobs.par_iter().for_each(|job| {
+                                if let Ok(Some(prepared)) =
+                                    engine.prepare_content_job(job, Some(budget))
+                                {
+                                    let _ = sender.send(prepared);
+                                }
+                            })
+                        })
                     });
-                    let _ = engine.commit_content_jobs(prepared);
-                }
+                    while let Ok(first) = receiver.recv() {
+                        let mut bytes = first.output.as_ref().map_or(0, |v| v.text.len());
+                        let mut prepared = vec![first];
+                        while prepared.len() < 8 && bytes < COMMIT_TEXT_BUDGET {
+                            let Ok(next) = receiver.try_recv() else {
+                                break;
+                            };
+                            bytes += next.output.as_ref().map_or(0, |v| v.text.len());
+                            prepared.push(next);
+                        }
+                        let _ = engine.commit_content_jobs(prepared);
+                    }
+                });
             }
         });
     }
@@ -233,8 +334,10 @@ impl Engine {
                 AND cs.availability='available' AND cs.freshness IN ('current','partial')
                 ORDER BY cs.depth DESC,cs.id LIMIT 1)
             WHERE e.id>? AND e.extension IN ({EXTENSIONS})
-                AND NOT EXISTS(SELECT 1 FROM content_items ci WHERE ci.entry_id=e.id)
-            ORDER BY e.id LIMIT ?");
+                AND NOT EXISTS(SELECT 1 FROM content_items ci WHERE ci.entry_id=e.id
+                    AND NOT(ci.truncated=1 AND ci.text_limit<{})
+                    AND (ci.state!='ready' OR EXISTS(SELECT 1 FROM content_words WHERE rowid=e.id)))
+            ORDER BY e.id LIMIT ?", extract::MAX_TEXT);
         let mut statement = c.prepare_cached(&sql)?;
         let jobs = statement
             .query_map(params![after_id, limit as i64], |r| {
@@ -278,32 +381,65 @@ impl Engine {
             mtime: time,
         })
     }
-    fn prepare_content_job(&self, job: &Job) -> Result<Option<PreparedContent>> {
+    fn prepare_content_job(
+        &self,
+        job: &Job,
+        budget: Option<&Arc<ContentBudget>>,
+    ) -> Result<Option<PreparedContent>> {
         let initial = {
             let c = self.lock()?;
             db::entry_path(&c, &job.id)?
         };
+        let mut permit = None;
+        let mut words_only = false;
         let output = (|| {
             let request = self.checked_content_job(job)?;
             if request.size > extract::MAX_FILE {
                 bail!("文件超过 64 MiB，已跳过内容索引");
             }
-            let result = extract::isolated(&request, || self.valid_content_job(job))?;
+            if let Some(budget) = budget {
+                let path = std::path::PathBuf::from(decode(&request.path));
+                permit = Some(budget.reserve(
+                    4 * extract::text_budget(
+                        request.size,
+                        &extension(&path.file_name().unwrap_or_default().to_string_lossy()),
+                    ),
+                ));
+            }
+            // Reuse validated stored text when only the word index is missing.
+            let cached = self.inner.content_db.lock().unwrap().query_row(
+                "SELECT text,truncated,message FROM content_items WHERE entry_id=? AND state='ready' AND identity=? AND size=? AND mtime=? AND NOT(truncated=1 AND text_limit<?)",
+                params![job.id,request.identity,request.size as i64,request.mtime,extract::MAX_TEXT as i64],
+                |r| Ok(extract::Extracted { text:r.get(0)?,truncated:r.get(1)?,note:r.get(2)? })).optional()?;
+            let result = match cached {
+                Some(result) => {
+                    words_only = true;
+                    result
+                }
+                None => extract::isolated(&request, || self.valid_content_job(job))?,
+            };
             self.checked_content_job(job)?;
             Ok(result)
         })();
         if !self.valid_content_job(job) {
             return Ok(None);
         }
+        let keywords = output
+            .as_ref()
+            .ok()
+            .map(|v| crate::search::index_text(&v.text));
         Ok(Some(PreparedContent {
             job: job.clone(),
             initial,
             output,
+            keywords,
+            words_only,
+            permit,
         }))
     }
     #[cfg(test)]
     fn index_content_job(&self, job: &Job) -> Result<()> {
-        self.commit_content_jobs(self.prepare_content_job(job)?.into_iter().collect())
+        self.commit_content_jobs(self.prepare_content_job(job, None)?.into_iter().collect())
     }
     fn commit_content_jobs(&self, prepared: Vec<PreparedContent>) -> Result<()> {
         if prepared.is_empty() {
@@ -316,6 +452,9 @@ impl Engine {
             job,
             initial,
             output,
+            keywords,
+            words_only,
+            permit: _permit,
         } in prepared
         {
             let Ok(current) = db::entry_path(&tx, &job.id) else {
@@ -328,10 +467,28 @@ impl Engine {
             if !still_valid {
                 continue;
             }
+            if words_only {
+                if let Some(tokens) = keywords {
+                    tx.execute("DELETE FROM content_words WHERE rowid=?", [&job.id])?;
+                    tx.execute(
+                        "INSERT INTO content_words(rowid,tokens) VALUES(?,?)",
+                        params![job.id, tokens],
+                    )?;
+                    changed = true;
+                }
+                continue;
+            }
             let (state, text, message, truncated) = match output {
                 Ok(v) => ("ready", v.text, v.note, v.truncated),
                 Err(e) => {
                     let message = format!("{e:#}");
+                    // Failed expansion must not discard the previously usable
+                    // prefix or retry indefinitely on every worker pass.
+                    if tx.execute("UPDATE content_items SET text_limit=?,message=? WHERE entry_id=? AND state='ready' AND truncated=1 AND text_limit<?",
+                        params![extract::MAX_TEXT as i64,format!("扩展索引失败，保留原有部分内容：{message}"),job.id,extract::MAX_TEXT as i64])? > 0 {
+                        changed = true;
+                        continue;
+                    }
                     let skipped = initial.2 > extract::MAX_FILE
                         || message.contains("未提取到文字")
                         || message.contains("占位")
@@ -344,7 +501,13 @@ impl Engine {
                     )
                 }
             };
-            tx.execute("INSERT INTO content_items(entry_id,identity,size,mtime,state,text,message,truncated,indexed_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(entry_id) DO UPDATE SET identity=excluded.identity,size=excluded.size,mtime=excluded.mtime,state=excluded.state,text=excluded.text,message=excluded.message,truncated=excluded.truncated,indexed_at=excluded.indexed_at", params![job.id,current.1,current.2 as i64,current.3,state,text,message,truncated,now()])?;
+            tx.execute("INSERT INTO content_items(entry_id,identity,size,mtime,state,text,message,truncated,indexed_at,text_limit) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(entry_id) DO UPDATE SET identity=excluded.identity,size=excluded.size,mtime=excluded.mtime,state=excluded.state,text=excluded.text,message=excluded.message,truncated=excluded.truncated,indexed_at=excluded.indexed_at,text_limit=excluded.text_limit", params![job.id,current.1,current.2 as i64,current.3,state,text,message,truncated,now(),extract::MAX_TEXT as i64])?;
+            if let Some(tokens) = keywords {
+                tx.execute(
+                    "INSERT INTO content_words(rowid,tokens) VALUES(?,?)",
+                    params![job.id, tokens],
+                )?;
+            }
             changed = true;
         }
         if changed {
@@ -402,7 +565,8 @@ impl Engine {
             .into_iter()
             .filter(|s| scope_id.is_empty() || s.id == scope_id)
         {
-            let sql=format!("SELECT COUNT(*),COALESCE(SUM(ci.state='ready'),0),COALESCE(SUM(ci.state='failed'),0),COALESCE(SUM(ci.state='skipped'),0),COALESCE(SUM(ci.truncated),0),MAX(ci.indexed_at) FROM entries e JOIN memberships m ON m.entry_id=e.id LEFT JOIN content_items ci ON ci.entry_id=e.id WHERE m.scope_id=? AND e.extension IN ({EXTENSIONS})");
+            let sql=format!("SELECT COUNT(*),COALESCE(SUM(ci.state='ready' AND NOT(ci.truncated=1 AND ci.text_limit<{})
+                    AND EXISTS(SELECT 1 FROM content_words WHERE rowid=e.id)),0),COALESCE(SUM(ci.state='failed'),0),COALESCE(SUM(ci.state='skipped'),0),COALESCE(SUM(ci.truncated),0),MAX(ci.indexed_at) FROM entries e JOIN memberships m ON m.entry_id=e.id LEFT JOIN content_items ci ON ci.entry_id=e.id WHERE m.scope_id=? AND e.extension IN ({EXTENSIONS})",extract::MAX_TEXT);
             let (eligible, ready, failed, skipped, truncated, last_indexed): (
                 u64,
                 u64,
@@ -452,27 +616,22 @@ impl Engine {
     }
     pub fn content_preview(&self, id: &str, search: &str) -> Result<TextPreview> {
         self.checked_entry(id)?;
-        let c = self.lock()?;
-        let (text,truncated):(String,bool) = c.query_row("SELECT ci.text,ci.truncated FROM content_items ci JOIN entries e ON e.id=ci.entry_id WHERE e.id=? AND ci.state='ready' AND ci.identity=e.identity AND ci.size=e.size AND ci.mtime=e.mtime AND EXISTS(SELECT 1 FROM memberships m JOIN scopes s ON s.id=m.scope_id WHERE m.entry_id=e.id AND s.content_enabled=1)", [id], |r|Ok((r.get(0)?,r.get(1)?))).context("此文件尚未完成内容索引，请先启用所在文件夹的内容索引")?;
-        let at = if search.is_empty() {
-            0
-        } else {
-            text.to_ascii_lowercase()
-                .find(&search.to_ascii_lowercase())
-                .unwrap_or(0)
-        };
-        let mut start = at.saturating_sub(1024);
-        while !text.is_char_boundary(start) {
-            start += 1;
-        }
-        let mut end = (start + 65536).min(text.len());
-        while !text.is_char_boundary(end) {
-            end -= 1;
-        }
-        Ok(TextPreview {
-            text: text[start..end].into(),
-            truncated: truncated || start > 0 || end < text.len(),
-        })
+        let c = self
+            .inner
+            .query_db
+            .lock()
+            .map_err(|_| anyhow::anyhow!("索引读取不可用"))?;
+        // SQLite offsets count Unicode characters. Return at most 16K characters
+        // (64 KiB UTF-8), without copying the complete document into Rust/UI.
+        c.query_row("WITH selected AS MATERIALIZED (
+            SELECT ci.entry_id,max(1,instr(lower(ci.text),lower(?))-1024) AS start
+            FROM content_items ci JOIN entries e ON e.id=ci.entry_id
+            WHERE e.id=? AND ci.state='ready' AND ci.identity=e.identity AND ci.size=e.size AND ci.mtime=e.mtime
+            AND EXISTS(SELECT 1 FROM memberships m JOIN scopes s ON s.id=m.scope_id WHERE m.entry_id=e.id AND s.content_enabled=1))
+            SELECT substr(ci.text,start,16384),ci.truncated OR start>1 OR length(ci.text)>start+16383
+            FROM selected JOIN content_items ci ON ci.entry_id=selected.entry_id",
+            params![search,id], |r| Ok(TextPreview { text:r.get(0)?,truncated:r.get(1)? }))
+            .context("此文件尚未完成内容索引，请先启用所在文件夹的内容索引")
     }
 }
 
@@ -522,6 +681,236 @@ mod tests {
         .unwrap()
     }
     #[test]
+    fn keyword_search_names_content_ranking_and_backfill() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("files");
+        fs::create_dir(&root).unwrap();
+        fs::write(
+            root.join("2026年项目合同_最终版.txt"),
+            "项目合同已经确认。付款需要审批。AB-123 使用 C++ 开发。",
+        )
+        .unwrap();
+        fs::write(root.join("合同.txt"), "合同 付款").unwrap();
+        fs::write(root.join("其他.txt"), "仅有合同，没有另外的关键词").unwrap();
+        let e = Engine::open(temp.path().join("db/index.sqlite")).unwrap();
+        let scope = e.add_scope(input(&root, true)).unwrap();
+        index(&e);
+        let query = |search: &str, mode: &str| Query {
+            search: search.into(),
+            search_mode: mode.into(),
+            match_mode: "keywords".into(),
+            sort: "relevance".into(),
+            scope_id: scope.clone(),
+            ..Default::default()
+        };
+        let q = query("合同 付款", "content");
+        let result = e.query(&q).unwrap();
+        assert_eq!(result.total, 2);
+        assert_eq!(result.entries[0].name, "合同.txt");
+        assert!(result
+            .entries
+            .iter()
+            .all(|v| v
+                .snippet
+                .as_ref()
+                .is_some_and(|s| s.before.chars().count() <= 4)));
+        let hidden_id = result.entries[0].id.clone();
+        e.set_hidden(std::slice::from_ref(&hidden_id), true)
+            .unwrap();
+        assert_eq!(e.query(&q).unwrap().total, 1);
+        assert_eq!(
+            e.query(&Query {
+                hidden: true,
+                ..q.clone()
+            })
+            .unwrap()
+            .total,
+            1
+        );
+        e.set_hidden(&[hidden_id], false).unwrap();
+        assert!(e
+            .query(&Query {
+                match_mode: "unknown".into(),
+                ..q.clone()
+            })
+            .is_err());
+        let many = (0..33)
+            .map(|n| format!("term{n}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(e.query(&query(&many, "content")).is_err());
+        assert_eq!(hits(&e, "合同 付款", "content", &scope).total, 1);
+        assert_eq!(e.query(&query("项目付款", "content")).unwrap().total, 1);
+        assert_eq!(e.query(&query("合同 不存在", "content")).unwrap().total, 0);
+        assert_eq!(e.query(&query("2026 最终", "all")).unwrap().total, 1);
+        assert_eq!(
+            e.query(&query("2026 合同 最终版 txt", "name"))
+                .unwrap()
+                .total,
+            1
+        );
+        assert_eq!(e.query(&query("项目合同", "content")).unwrap().total, 1);
+        assert_eq!(e.query(&query("AB-123 C++", "content")).unwrap().total, 1);
+        assert_eq!(e.query(&query("AB-999 C++", "content")).unwrap().total, 0);
+        assert_eq!(
+            e.query(&query("合同.txt", "name")).unwrap().entries[0].name,
+            "合同.txt"
+        );
+        assert_eq!(e.query(&query("   ", "content")).unwrap().total, 0);
+        assert!(e.query(&query("\" OR *", "content")).is_ok());
+        // Missing word indexes stay pending while paused, keeping literal hits.
+        e.content_action(&scope, "pause").unwrap();
+        e.lock()
+            .unwrap()
+            .execute("DELETE FROM content_words", [])
+            .unwrap();
+        assert_eq!(e.content_status(&scope).unwrap().scopes[0].pending, 3);
+        assert!(e.next_content_job().unwrap().is_none());
+        assert_eq!(hits(&e, "付款", "content", &scope).total, 2);
+        e.content_action(&scope, "resume").unwrap();
+        index(&e);
+        assert_eq!(e.query(&q).unwrap().total, 2);
+        assert_eq!(e.content_status(&scope).unwrap().scopes[0].pending, 0);
+        // Current file membership and disabled scopes still gate all word hits.
+        e.content_action(&scope, "disable").unwrap();
+        assert_eq!(e.query(&q).unwrap().total, 0);
+        assert_eq!(
+            e.lock()
+                .unwrap()
+                .query_row("SELECT count(*) FROM content_words", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(e.query(&query("合同 最终版", "name")).unwrap().total, 1);
+    }
+
+    #[test]
+    fn large_document_tail_snippets_and_previews_are_searchable_and_bounded() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("files");
+        fs::create_dir(&root).unwrap();
+        let text = format!("{}合同末尾 EndMarker", "正文🙂".repeat(320_000));
+        fs::write(root.join("large.txt"), &text).unwrap();
+        let e = Engine::open(temp.path().join("db/index.sqlite")).unwrap();
+        let scope = e.add_scope(input(&root, true)).unwrap();
+        index(&e);
+        for search in ["合同末尾", "合同", "末", "endmarker", "合同末尾 EndMarker"] {
+            let result = hits(&e, search, "content", &scope);
+            assert_eq!(result.total, 1, "{search}");
+            let item = &result.entries[0];
+            assert_eq!(
+                item.snippet.as_ref().unwrap().matched.to_ascii_lowercase(),
+                search.to_ascii_lowercase()
+            );
+            let preview = e.content_preview(&item.id, search).unwrap();
+            assert!(preview.text.contains("合同末尾 EndMarker"));
+            assert!(preview.text.len() <= 65536);
+            assert!(preview.truncated);
+        }
+        assert_eq!(e.content_status(&scope).unwrap().scopes[0].truncated, 0);
+        assert_eq!(hits(&e, "合同末尾", "name", &scope).total, 0);
+        assert_eq!(hits(&e, "EndMarker 合同末尾", "content", &scope).total, 0);
+    }
+
+    #[test]
+    fn old_truncated_rows_upgrade_without_losing_search_or_retrying_failures() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("files");
+        fs::create_dir(&root).unwrap();
+        fs::write(
+            root.join("large.txt"),
+            format!("oldprefix {}newtail", "正文".repeat(360_000)),
+        )
+        .unwrap();
+        fs::write(root.join("small.txt"), "complete-document").unwrap();
+        let e = Engine::open(temp.path().join("db/index.sqlite")).unwrap();
+        let scope = e.add_scope(input(&root, true)).unwrap();
+        index(&e);
+        let id = hits(&e, "newtail", "content", &scope).entries[0].id.clone();
+        {
+            let c = e.lock().unwrap();
+            c.execute(
+                "UPDATE content_items SET text='oldprefix',truncated=1 WHERE entry_id=?",
+                [&id],
+            )
+            .unwrap();
+            c.execute_batch("ALTER TABLE content_items DROP COLUMN text_limit;")
+                .unwrap();
+            migrate(&c).unwrap();
+        }
+        e.content_action(&scope, "pause").unwrap();
+        assert!(e.next_content_job().unwrap().is_none());
+        assert_eq!(hits(&e, "oldprefix", "content", &scope).total, 1);
+        let status = e.content_status(&scope).unwrap();
+        assert_eq!((status.scopes[0].ready, status.scopes[0].pending), (1, 1));
+        e.content_action(&scope, "resume").unwrap();
+        let jobs = e.next_content_jobs_after(0, 128).unwrap();
+        assert_eq!(jobs.len(), 1);
+        let mut prepared = e.prepare_content_job(&jobs[0], None).unwrap().unwrap();
+        prepared.output = Err(anyhow::anyhow!("synthetic parser failure"));
+        e.commit_content_jobs(vec![prepared]).unwrap();
+        assert_eq!(hits(&e, "oldprefix", "content", &scope).total, 1);
+        // Expansion failure must not retry parsing. One cached-prefix word
+        // backfill is still needed after migrating an old truncated document.
+        let word_job = e.next_content_job().unwrap().unwrap();
+        let prepared = e.prepare_content_job(&word_job, None).unwrap().unwrap();
+        assert!(prepared.words_only);
+        assert_eq!(prepared.output.as_ref().unwrap().text, "oldprefix");
+        e.commit_content_jobs(vec![prepared]).unwrap();
+        assert!(e.next_content_job().unwrap().is_none());
+        assert!(e.content_status(&scope).unwrap().issues[0]
+            .message
+            .contains("保留原有部分内容"));
+        // Simulate the old cap again, then verify successful automatic expansion.
+        e.lock()
+            .unwrap()
+            .execute(
+                "UPDATE content_items SET text_limit=2097152 WHERE entry_id=?",
+                [&id],
+            )
+            .unwrap();
+        index(&e);
+        assert_eq!(hits(&e, "newtail", "content", &scope).total, 1);
+        let status = e.content_status(&scope).unwrap();
+        assert_eq!(
+            (
+                status.scopes[0].ready,
+                status.scopes[0].pending,
+                status.scopes[0].truncated
+            ),
+            (2, 0, 0)
+        );
+        assert!(e.next_content_job().unwrap().is_none());
+        e.lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO content_fts(content_fts,rank) VALUES('integrity-check',1)",
+                [],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn pending_text_budget_blocks_until_a_result_is_released() {
+        let budget = Arc::new(ContentBudget::default());
+        let first = budget.reserve(CONTENT_BUFFER_BUDGET / 2);
+        let second = budget.reserve(CONTENT_BUFFER_BUDGET / 2);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let other = budget.clone();
+        let worker = thread::spawn(move || {
+            let permit = other.reserve(1);
+            sender.send(()).unwrap();
+            drop(permit);
+        });
+        assert!(receiver.recv_timeout(Duration::from_millis(50)).is_err());
+        drop(first);
+        receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+        worker.join().unwrap();
+        drop(second);
+        assert_eq!(*budget.used.lock().unwrap(), 0);
+    }
+    #[test]
     fn batched_jobs_choose_one_owner_and_revalidate_before_commit() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("files");
@@ -542,7 +931,7 @@ mod tests {
         assert!(jobs.iter().all(|j| j.scope == child));
         let mut prepared = Vec::new();
         for job in &jobs {
-            prepared.push(e.prepare_content_job(job).unwrap().unwrap());
+            prepared.push(e.prepare_content_job(job, None).unwrap().unwrap());
         }
         // Revoking a scope after parsing must prevent every buffered result
         // from being committed, not just the currently active parser's result.
@@ -553,7 +942,7 @@ mod tests {
         assert_eq!(jobs.len(), 12);
         let prepared = jobs
             .iter()
-            .filter_map(|j| e.prepare_content_job(j).unwrap())
+            .filter_map(|j| e.prepare_content_job(j, None).unwrap())
             .collect();
         e.commit_content_jobs(prepared).unwrap();
         assert_eq!(hits(&e, "original", "content", "").total, 12);

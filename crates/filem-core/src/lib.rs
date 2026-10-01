@@ -6,6 +6,7 @@ mod extract;
 mod hidden;
 pub mod model;
 mod moving;
+mod search;
 pub fn run_helper_if_requested() -> bool {
     extract::run_helper_if_requested() || everything::run_helper_if_requested()
 }
@@ -427,7 +428,13 @@ impl Engine {
         if !["", "name", "content", "all"].contains(&q.search_mode.as_str()) {
             bail!("未知搜索模式");
         }
-        if q.search_mode == "content" || q.search_mode == "all" {
+        if !["", "exact", "keywords"].contains(&q.match_mode.as_str()) {
+            bail!("未知匹配方式");
+        }
+        if q.match_mode == "keywords" && crate::search::terms(&q.search).len() > 32 {
+            bail!("关键词最多 32 个，请缩短搜索内容或使用精确匹配。");
+        }
+        if q.match_mode == "keywords" || q.search_mode == "content" || q.search_mode == "all" {
             self.query_local(q)
         } else {
             self.query_with_everything(q)

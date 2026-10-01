@@ -200,17 +200,29 @@ pub fn query(c: &Connection, q: &Query) -> Result<QueryResult> {
         values.push(q.group.clone().into());
     }
     if !q.search.is_empty() {
-        let names = "(instr(lower(e.name),lower(?))>0 OR instr(lower(d.display),lower(?))>0)";
+        let terms = if q.match_mode == "keywords" {
+            crate::search::terms(&q.search)
+        } else {
+            vec![q.search.clone()]
+        };
         if q.search_mode == "content" {
             conditions.push(crate::content::match_sql(q, &mut values));
         } else {
-            values.push(q.search.clone().into());
-            values.push(q.search.clone().into());
+            let names =
+                if terms.is_empty() {
+                    "0".to_string()
+                } else {
+                    terms.iter().map(|term| {
+                    values.push(term.clone().into());
+                    values.push(term.clone().into());
+                    "(instr(lower(e.name),lower(?))>0 OR instr(lower(d.display),lower(?))>0)"
+                }).collect::<Vec<_>>().join(" AND ")
+                };
             if q.search_mode == "all" {
                 let content = crate::content::match_sql(q, &mut values);
-                conditions.push(format!("({names} OR {content})"));
+                conditions.push(format!("(({names}) OR {content})"));
             } else {
-                conditions.push(names.into());
+                conditions.push(format!("({names})"));
             }
         }
     }
@@ -240,12 +252,36 @@ pub fn query(c: &Connection, q: &Query) -> Result<QueryResult> {
     };
     let direction = if q.descending { "DESC" } else { "ASC" };
     let limit = if q.limit == 0 { 100 } else { q.limit.min(500) };
+    let mut relevance = String::new();
+    if q.sort == "relevance" && !q.search.trim().is_empty() {
+        let terms = crate::search::terms(&q.search);
+        if q.search_mode != "content" {
+            values.push(q.search.trim().to_string().into());
+            values.push(q.search.trim().to_string().into());
+            let name_terms = terms
+                .iter()
+                .map(|term| {
+                    values.push(term.clone().into());
+                    "instr(lower(e.name),lower(?))>0"
+                })
+                .collect::<Vec<_>>()
+                .join(" AND ");
+            relevance.push_str(&format!("CASE WHEN lower(e.name)=lower(?) THEN 0 WHEN instr(lower(e.name),lower(?))>0 THEN 1 WHEN {} THEN 2 ELSE 3 END ASC,",if name_terms.is_empty(){"0"}else{&name_terms}));
+        }
+        if q.match_mode == "keywords"
+            && ["content", "all"].contains(&q.search_mode.as_str())
+            && !terms.is_empty()
+        {
+            values.push(crate::search::expression(&terms).into());
+            relevance.push_str("COALESCE((SELECT rank FROM content_words WHERE rowid=e.id AND content_words MATCH ?),0) ASC,");
+        }
+    }
     values.push(Value::Integer(limit as i64));
     values.push(Value::Integer(q.offset.min(i64::MAX as usize) as i64));
     let sql=format!("SELECT e.id,e.name,d.path,e.native_name,e.extension,e.group_name,e.size,e.mtime,(e.hidden OR d.hidden),e.attributes,
       (SELECT s.id FROM scopes s JOIN memberships m ON s.id=m.scope_id WHERE m.entry_id=e.id ORDER BY s.depth DESC,s.id LIMIT 1),
       EXISTS(SELECT 1 FROM memberships m JOIN scopes s ON s.id=m.scope_id WHERE m.entry_id=e.id AND s.availability='available'),d.hidden
-      {from} ORDER BY {sort} {direction},e.id ASC LIMIT ? OFFSET ?");
+      {from} ORDER BY {relevance}{sort} {direction},e.id ASC LIMIT ? OFFSET ?");
     let mut stmt = c.prepare(&sql)?;
     let mut rows = stmt.query(params_from_iter(values.iter()))?;
     let mut entries = Vec::new();
@@ -282,10 +318,32 @@ pub fn query(c: &Connection, q: &Query) -> Result<QueryResult> {
     let content_search =
         !q.search.is_empty() && ["content", "all"].contains(&q.search_mode.as_str());
     if content_search {
+        let terms = if q.match_mode == "keywords" {
+            crate::search::terms(&q.search)
+        } else {
+            vec![q.search.clone()]
+        };
+        let terms_json = serde_json::to_string(&terms)?;
         for entry in &mut entries {
-            let text: Option<(String,bool)> = c.query_row("SELECT substr(ci.text,max(1,instr(lower(ci.text),lower(?))-45),length(?)+190),ci.truncated FROM content_items ci JOIN entries e ON e.id=ci.entry_id WHERE e.id=? AND ci.state='ready' AND ci.identity=e.identity AND ci.size=e.size AND ci.mtime=e.mtime AND EXISTS(SELECT 1 FROM memberships m JOIN scopes s ON s.id=m.scope_id WHERE m.entry_id=e.id AND s.content_enabled=1 AND (?='' OR s.id=?))", params![q.search,q.search,entry.id,q.scope_id,q.scope_id], |r|Ok((r.get(0)?,r.get(1)?))).optional()?;
+            let text: Option<(String,bool)> = c.query_row("SELECT substr(ci.text,max(1,coalesce((SELECT min(nullif(instr(lower(ci.text),lower(value)),0)) FROM json_each(?)),1)-45),?+190),ci.truncated FROM content_items ci JOIN entries e ON e.id=ci.entry_id WHERE e.id=? AND ci.state='ready' AND ci.identity=e.identity AND ci.size=e.size AND ci.mtime=e.mtime AND EXISTS(SELECT 1 FROM memberships m JOIN scopes s ON s.id=m.scope_id WHERE m.entry_id=e.id AND s.content_enabled=1 AND (?='' OR s.id=?))", params![terms_json,terms.iter().map(|s|s.chars().count()).max().unwrap_or(0) as i64,entry.id,q.scope_id,q.scope_id], |r|Ok((r.get(0)?,r.get(1)?))).optional()?;
             if let Some((text, truncated)) = text {
-                entry.snippet = crate::content::snippet(&text, &q.search, truncated);
+                entry.snippet = terms
+                    .iter()
+                    .filter_map(|term| crate::content::snippet(&text, term, truncated))
+                    .min_by_key(|s| s.before.chars().count());
+                if q.match_mode == "keywords" {
+                    if let Some(snippet) = &mut entry.snippet {
+                        snippet.before = snippet
+                            .before
+                            .chars()
+                            .rev()
+                            .take(4)
+                            .collect::<Vec<_>>()
+                            .into_iter()
+                            .rev()
+                            .collect();
+                    }
+                }
             }
         }
     }
@@ -294,7 +352,9 @@ pub fn query(c: &Connection, q: &Query) -> Result<QueryResult> {
         search_engine: if content_search { "content" } else { "local" }.into(),
         search_notice: if content_search {
             Some(
-                if q.search.chars().count() < 3 {
+                if q.match_mode == "keywords" {
+                    "中文分词 · 全部关键词匹配；仅搜索已提取的正文"
+                } else if q.search.chars().count() < 3 {
                     "正在搜索已索引内容 · 短词搜索可能较慢；未完成索引的文件暂不参与内容匹配"
                 } else {
                     "正在搜索已索引内容 · 未完成索引的文件暂不参与内容匹配"

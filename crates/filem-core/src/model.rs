@@ -100,6 +100,7 @@ pub struct Query {
     pub candidate_ids: Option<Vec<String>>,
     pub search: String,
     pub search_mode: String,
+    pub match_mode: String,
     pub scope_id: String,
     pub extension: String,
     pub group: String,

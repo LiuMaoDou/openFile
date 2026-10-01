@@ -2,15 +2,15 @@
 
 按用户指定的盘或文件夹聚合相同扩展名文件。索引、筛选和隐藏只改变本地视图，源文件保持原位。
 
-当前版本：**0.1.12 开发验证版**。Rust + SQLite 核心、React 界面与 Tauri 2 桌面壳已实现；Windows 实机验证仍待执行，不能视为 M0/M1 全量验收通过。
+当前版本：**0.1.13 开发验证版**。Rust + SQLite 核心、React 界面与 Tauri 2 桌面壳已实现；Windows 实机验证仍待执行，不能视为 M0/M1 全量验收通过。
 
 ## Windows 直接运行
 
 从 **0.1.11** 开始，仅发布 **Windows x64 安装版与便携版**。不再为新版本上传 Mac 安装文件；[0.1.10 及更早版本的 Mac 下载](https://github.com/LiuMaoDou/openFile/releases/tag/v0.1.10)保留在历史 Releases。
 
-**[下载 Windows 安装版](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.12/FileM_0.1.12_x64-setup.exe)** · **[下载免安装 ZIP](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.12/FileM-0.1.12-windows-x64-portable.zip)** · [版本说明与校验值](https://github.com/LiuMaoDou/openFile/releases/tag/v0.1.12)
+**[下载 Windows 安装版](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.13/FileM_0.1.13_x64-setup.exe)** · **[下载免安装 ZIP](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.13/FileM-0.1.13-windows-x64-portable.zip)** · [版本说明与校验值](https://github.com/LiuMaoDou/openFile/releases/tag/v0.1.13)
 
-Windows 11 x64 用户可运行 `FileM_0.1.12_x64-setup.exe`，或完整解压 `FileM-0.1.12-windows-x64-portable.zip` 后双击 `FileM.exe`。使用者无需安装 Node.js、Rust 或 Visual Studio。免安装包使用系统 WebView2；安装版会在缺少该运行时时联网安装。使用步骤和版本边界见 [Windows 使用说明](docs/Windows_使用说明.md) 、[0.1.12 索引存储更新说明](docs/0.1.12_更新说明.md) 与 [0.1.4 内容搜索更新说明](docs/Windows_0.1.4_更新说明.md)；此前修复见 [0.1.3 修复与验证记录](docs/Windows_0.1.3_修复记录.md) 和 [代码复查](docs/Windows_0.1.3_代码复查.md)。分发包通过 GitHub Releases 下载，构建产物不纳入源码版本控制。Release 页面中的 Source code 是源码压缩包，不能直接双击运行；Packages 栏目不用于此应用的安装包分发。
+Windows 11 x64 用户可运行 `FileM_0.1.13_x64-setup.exe`，或完整解压 `FileM-0.1.13-windows-x64-portable.zip` 后双击 `FileM.exe`。使用者无需安装 Node.js、Rust 或 Visual Studio。免安装包使用系统 WebView2；安装版会在缺少该运行时时联网安装。使用步骤和版本边界见 [Windows 使用说明](docs/Windows_使用说明.md) 、[0.1.13 搜索更新说明](docs/0.1.13_更新说明.md) 与 [0.1.4 内容搜索更新说明](docs/Windows_0.1.4_更新说明.md)；此前修复见 [0.1.3 修复与验证记录](docs/Windows_0.1.3_修复记录.md) 和 [代码复查](docs/Windows_0.1.3_代码复查.md)。分发包通过 GitHub Releases 下载，构建产物不纳入源码版本控制。Release 页面中的 Source code 是源码压缩包，不能直接双击运行；Packages 栏目不用于此应用的安装包分发。
 
 ## 外观主题
 
@@ -89,15 +89,26 @@ macOS 使用本地索引。Everything 的候选路径、授权检查和回退有
 
 在文件夹设置中勾选 **启用内容索引**，或展开列表上方的 **内容索引**，为指定文件夹点击 **开启内容索引**。等待文字提取完成后，把搜索模式切换为 **文件内容** 或 **文件名 + 内容**。结果显示命中片段与高亮，点击文件可预览索引文字。无需安装 AnyTXT、Everything、Java 或 Office。
 
-支持 TXT/Markdown/常见代码与配置文本、带文字层的 PDF、DOCX、XLSX、PPTX。文本解码支持 UTF-8、带 BOM 的 UTF-16 和 GBK。中文单字、短词以及中英文混合短语按连续字面量匹配；不把空格解释为 AND，不提供自然语言问答、通配符或正则。英文不区分大小写。
+支持 TXT/Markdown/常见代码与配置文本、带文字层的 PDF、DOCX、XLSX、PPTX。文本解码支持 UTF-8、带 BOM 的 UTF-16 和 GBK。默认精确模式下，中文单字、短词以及中英文混合短语按连续字面量匹配；不把空格解释为 AND，不提供自然语言问答、通配符或正则。英文不区分大小写。
 
 每个文件夹独立开启、暂停、继续、关闭或重建。状态显示完成、待处理、失败、跳过和截断数，失败文件可展开查看原因。仅提取开启文件夹中的文件；关闭后清理无其他开启文件夹引用的内容。正文与 FTS5 存在同一 SQLite 中，文件修改、移动、删除后同步失效或清理，避免旧内容与新路径混用。文件事件监听仍沿用元数据扫描的刷新机制，应用关闭期间不会后台索引。
 
-首版边界：单文件最大 64 MiB，最多索引 2 MiB UTF-8 文字，截断会标明；解析进程有 30 秒时限，Windows 使用 512 MiB 内存上限、macOS 按实际内存占用监测并停止超限进程。扫描版 PDF/图片 OCR、旧版 DOC/XLS/PPT、WPS 专有格式和压缩包内容尚未支持。部分特殊 PDF 字体、损坏/加密文件可能提取失败，以逐项状态为准。
+容量与保护：单文件最大 64 MiB，最多索引 32 MiB UTF-8 文字，截断会标明。旧版按 2 MiB 截断的文档会自动补建，暂停的文件夹在继续后补建；补建期间保留原有内容供搜索，失败会保留原有部分内容并说明原因，可通过重建重试。已有正文无需重新提取即可补建词索引。解析进程仍有 30 秒时限，Windows 使用 512 MiB 内存上限、macOS 按实际内存占用监测并停止超限进程。扫描版 PDF/图片 OCR、旧版 DOC/XLS/PPT、WPS 专有格式和压缩包内容尚未支持。部分特殊 PDF 字体、损坏/加密文件可能提取失败，以逐项状态为准。
 
-3 个及以上字符使用 SQLite FTS5 trigram 索引；1～2 个字符在已保存文字中检索，文档量大时会较慢。内容索引保存在本机应用数据目录，不加密；空间取决于提取文字与索引大小。关闭会删除逻辑记录，不承诺从 SQLite 空闲页、WAL 或备份中安全擦除正文。当前数据库版本为 5，0.1.11 之前的应用不能直接打开升级后的数据库。
+正文通过 256 KiB 二进制消息分批传输，避免整份正文的 JSON 转义与复制。解析前按文字容量预留预算，待提交正文与分词缓冲的预算总额为 128 MiB（不包含独立解析进程、SQLite 和应用其他内存）；完成的文档及时入库。单份正文仍作为完整文本建立索引，连续短语可以跨传输块命中。预览仅读取命中附近最多 16,384 个字符（不超过 64 KiB UTF-8），避免把大文档全文传给界面。
+
+精确模式下，3 个及以上字符使用 SQLite FTS5 trigram 索引；1～2 个字符在已保存文字中检索，文档量大时会较慢。内容索引保存在本机应用数据目录，不加密；空间取决于提取文字与索引大小。关闭会删除逻辑记录，不承诺从 SQLite 空闲页、WAL 或备份中安全擦除正文。当前数据库版本为 5，0.1.11 之前的应用不能直接打开升级后的数据库。
 
 开发验证：`npm test` 覆盖内容索引与原有文件操作；`node scripts/cargo.mjs run -p filem-core --example content_smoke` 使用仓库内合成文档验证独立解析进程、中文全文查询及关闭清理。CI 在 Windows/macOS 执行相同流程。
+
+### 关键词匹配
+
+搜索框旁新增“精确匹配 / 关键词匹配”。默认仍为精确匹配，保持连续原文、空格及特殊符号的原有搜索行为。
+
+- 文件名 / 路径：关键词模式按中文分词及空格、下划线、路径分隔符等拆词，要求每个词都出现在名称或路径中。相关度排序优先完整文件名，其次连续名称片段，再到名称中的全部词和路径匹配；数字、`AB-123`、`C++` 保留，连字符型号不拆散。
+- 文件内容：使用内置 Jieba 词典建立本地词索引，按全部词匹配，分词边界不一致或词索引未就绪时以逐词字面匹配兜底。默认按 BM25 相关度排序，也可选择文件名、大小等排序。关键词不是同义词或语义搜索；专业术语分词不理想时可切回精确匹配。单次最多 32 个词。
+- 已有正文词索引在后台自动补建，复用已保存并核验的正文；暂停的文件夹继续后处理。补建期间仍支持精确搜索，词索引会增加磁盘占用。禁用、重建、文件变更和目录移除会同步清理词索引。
+- 关键词模式使用本地索引，避免 Everything 的查询语义导致漏搜；精确文件名搜索仍可使用 Everything 加速。文件名 + 内容模式要求名称/路径或正文一侧满足全部关键词。
 
 ## 隐藏目录
 

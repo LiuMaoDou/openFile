@@ -415,6 +415,7 @@ main {
 }
 .toolbar {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   padding: 0 28px;
   align-items: center;
@@ -427,8 +428,8 @@ main {
   border-radius: 6px;
   padding: 0 12px;
   height: var(--control-height);
-  flex: 1;
-  min-width: 100px;
+  flex: 1 1 240px;
+  min-width: 180px;
   color: var(--muted);
 }
 .search-field input {
