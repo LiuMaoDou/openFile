@@ -2,15 +2,15 @@
 
 按用户指定的盘或文件夹聚合相同扩展名文件。索引、筛选和隐藏只改变本地视图，源文件保持原位。
 
-当前版本：**0.1.13 开发验证版**。Rust + SQLite 核心、React 界面与 Tauri 2 桌面壳已实现；Windows 实机验证仍待执行，不能视为 M0/M1 全量验收通过。
+当前版本：**0.1.14 开发验证版**。Rust + SQLite 核心、React 界面与 Tauri 2 桌面壳已实现；Windows 实机验证仍待执行，不能视为 M0/M1 全量验收通过。
 
 ## Windows 直接运行
 
-从 **0.1.11** 开始，仅发布 **Windows x64 安装版与便携版**。不再为新版本上传 Mac 安装文件；[0.1.10 及更早版本的 Mac 下载](https://github.com/LiuMaoDou/openFile/releases/tag/v0.1.10)保留在历史 Releases。
+本次 **0.1.14 仅发布 Windows x64 便携版**。0.1.13 及更早版本的安装包保留在历史 Releases；新版本不发布 Mac 安装文件。
 
-**[下载 Windows 安装版](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.13/FileM_0.1.13_x64-setup.exe)** · **[下载免安装 ZIP](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.13/FileM-0.1.13-windows-x64-portable.zip)** · [版本说明与校验值](https://github.com/LiuMaoDou/openFile/releases/tag/v0.1.13)
+**[下载 Windows 便携 ZIP](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.14/FileM-0.1.14-windows-x64-portable.zip)** · [版本说明与校验值](https://github.com/LiuMaoDou/openFile/releases/tag/v0.1.14)
 
-Windows 11 x64 用户可运行 `FileM_0.1.13_x64-setup.exe`，或完整解压 `FileM-0.1.13-windows-x64-portable.zip` 后双击 `FileM.exe`。使用者无需安装 Node.js、Rust 或 Visual Studio。免安装包使用系统 WebView2；安装版会在缺少该运行时时联网安装。使用步骤和版本边界见 [Windows 使用说明](docs/Windows_使用说明.md) 、[0.1.13 搜索更新说明](docs/0.1.13_更新说明.md) 与 [0.1.4 内容搜索更新说明](docs/Windows_0.1.4_更新说明.md)；此前修复见 [0.1.3 修复与验证记录](docs/Windows_0.1.3_修复记录.md) 和 [代码复查](docs/Windows_0.1.3_代码复查.md)。分发包通过 GitHub Releases 下载，构建产物不纳入源码版本控制。Release 页面中的 Source code 是源码压缩包，不能直接双击运行；Packages 栏目不用于此应用的安装包分发。
+Windows 11 x64 用户完整解压 `FileM-0.1.14-windows-x64-portable.zip` 后双击 `FileM.exe`。使用者无需安装 Node.js、Rust 或 Visual Studio。便携版使用系统 WebView2；缺少时请先安装 [Microsoft WebView2 Evergreen Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)。索引仍保存在用户应用数据目录或已设置的索引位置。使用步骤和版本边界见 [Windows 使用说明](docs/Windows_使用说明.md)、[0.1.14 更新说明](docs/0.1.14_更新说明.md) 和 [0.1.13 搜索更新说明](docs/0.1.13_更新说明.md)。分发包通过 GitHub Releases 下载，构建产物不纳入源码版本控制。Release 页面中的 Source code 是源码压缩包，不能直接双击运行；Packages 栏目不用于此应用的下载。
 
 ## 外观主题
 
@@ -27,6 +27,8 @@ npm run dev
 
 打开 http://127.0.0.1:5178 。浏览器开发入口通过本机 Rust 服务访问文件系统，支持输入本机文件夹完整路径；它不是纯浏览器文件系统方案。默认只监听本机回环地址，Rust API 需要每次启动生成的鉴权令牌。
 
+Rust 开发服务默认使用 4318 端口；若与其他项目冲突，可设置环境变量 `FILEM_DEV_PORT` 为其他可用端口后启动，前端代理会同步使用该端口。
+
 Tauri 桌面运行支持系统目录选择器，直接调用 Rust 核心：
 
 ```sh
@@ -41,13 +43,13 @@ npm run desktop:build
 npm run desktop:build -- --bundles app
 ```
 
-Windows x64 安装包的构建命令：
+Windows x64 便携版可先构建独立可执行文件：
 
 ```sh
-npm run windows:build
+npm run windows:build -- --no-bundle -- --locked
 ```
 
-在 Windows 开发机上使用 Rust MSVC 工具链和 Visual Studio C++ 编译工具；在 macOS / Linux 上使用 `cargo-xwin`、LLVM、LLD 与 NSIS。脚本固定目标为 `x86_64-pc-windows-msvc`，读取 Windows 专用安装配置。安装包输出到 `target/x86_64-pc-windows-msvc/release/bundle/nsis/`。这些编译工具仅构建者需要。
+在 Windows 开发机上使用 Rust MSVC 工具链和 Visual Studio C++ 编译工具；在 macOS / Linux 上使用 `cargo-xwin`、LLVM、LLD 与 NSIS。脚本固定目标为 `x86_64-pc-windows-msvc`，读取 Windows 专用安装配置。独立可执行文件输出到 `target/x86_64-pc-windows-msvc/release/filem-desktop.exe`；打包便携 ZIP 时应同时附上许可和使用说明。如需构建安装版，去掉 `--no-bundle`，安装包输出到 `target/x86_64-pc-windows-msvc/release/bundle/nsis/`。这些编译工具仅构建者需要。
 
 ## 已实现
 

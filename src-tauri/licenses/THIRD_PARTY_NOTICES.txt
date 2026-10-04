@@ -1,4 +1,4 @@
-FileM 0.1.13 — third-party dependency notices
+FileM 0.1.14 — third-party dependency notices
 
 This inventory includes application and build dependencies. Individual licenses and copyright notices follow.
 

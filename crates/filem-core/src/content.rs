@@ -103,7 +103,8 @@ pub(crate) fn migrate(c: &Connection) -> Result<()> {
             INSERT INTO content_fts(rowid,text) VALUES(new.entry_id,new.text); END;
           CREATE TRIGGER IF NOT EXISTS content_delete AFTER DELETE ON content_items BEGIN
             INSERT INTO content_fts(content_fts,rowid,text) VALUES('delete',old.entry_id,old.text); END;
-          CREATE TRIGGER IF NOT EXISTS content_update AFTER UPDATE ON content_items BEGIN
+          DROP TRIGGER IF EXISTS content_update;
+          CREATE TRIGGER content_update AFTER UPDATE OF text ON content_items WHEN old.text!=new.text BEGIN
             INSERT INTO content_fts(content_fts,rowid,text) VALUES('delete',old.entry_id,old.text);
             INSERT INTO content_fts(rowid,text) VALUES(new.entry_id,new.text); END;
           CREATE TRIGGER IF NOT EXISTS content_entry_changed AFTER UPDATE ON entries
@@ -159,14 +160,25 @@ pub(crate) fn match_sql(query: &Query, values: &mut Vec<rusqlite::types::Value>)
             values.push(crate::search::expression(&terms).into());
             // Literal term fallback keeps compound words and technical substrings
             // searchable when dictionary boundaries differ or backfill is pending.
-            let literal = terms
+            // Reuse the trigram index for longer terms before scanning stored
+            // text. Short terms still work through the exact literal checks.
+            let mut literal = Vec::new();
+            let trigrams = terms
                 .iter()
-                .map(|term| {
-                    values.push(term.clone().into());
-                    "instr(lower(ci.text),lower(?))>0"
-                })
-                .collect::<Vec<_>>()
-                .join(" AND ");
+                .filter(|term| term.chars().count() >= 3)
+                .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
+                .collect::<Vec<_>>();
+            if !trigrams.is_empty() {
+                values.push(trigrams.join(" AND ").into());
+                literal.push(
+                    "ci.entry_id IN (SELECT rowid FROM content_fts WHERE content_fts MATCH ?)",
+                );
+            }
+            literal.extend(terms.iter().map(|term| {
+                values.push(term.clone().into());
+                "instr(lower(ci.text),lower(?))>0"
+            }));
+            let literal = literal.join(" AND ");
             conditions.push(format!("(ci.entry_id IN (SELECT rowid FROM content_words WHERE content_words MATCH ?) OR ({literal}))"));
         }
         return format!(
@@ -783,6 +795,87 @@ mod tests {
             0
         );
         assert_eq!(e.query(&query("合同 最终版", "name")).unwrap().total, 1);
+    }
+
+    #[test]
+    fn keyword_literal_fallback_keeps_substrings_short_terms_and_punctuation() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("files");
+        fs::create_dir(&root).unwrap();
+        // The long unbroken word exceeds the word-index token limit. Its
+        // substrings must remain searchable through the literal fallback.
+        fs::write(
+            root.join("target.txt"),
+            format!(
+                "{}AB-123xxC++ alphaomega 合同 | \"\"\" :::",
+                "x".repeat(20_000)
+            ),
+        )
+        .unwrap();
+        fs::write(root.join("other.txt"), "unrelated text").unwrap();
+        let e = Engine::open(temp.path().join("db/index.sqlite")).unwrap();
+        let scope = e.add_scope(input(&root, true)).unwrap();
+        index(&e);
+        e.content_action(&scope, "pause").unwrap();
+        e.lock()
+            .unwrap()
+            .execute("DELETE FROM content_words", [])
+            .unwrap();
+        for search in ["123 C++", "ALPHA 合同", "合同", ":::", "\"\"\"", "|"] {
+            let result = e
+                .query(&Query {
+                    search: search.into(),
+                    search_mode: "content".into(),
+                    match_mode: "keywords".into(),
+                    scope_id: scope.clone(),
+                    ..Default::default()
+                })
+                .unwrap();
+            assert_eq!(result.total, 1, "{search}");
+            assert_eq!(result.entries[0].name, "target.txt");
+        }
+    }
+
+    #[test]
+    fn metadata_updates_do_not_rewrite_the_full_text_index() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("files");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("target.txt"), "original searchable text").unwrap();
+        let e = Engine::open(temp.path().join("db/index.sqlite")).unwrap();
+        let scope = e.add_scope(input(&root, true)).unwrap();
+        index(&e);
+        {
+            let c = e.lock().unwrap();
+            // An existing database must replace the old unconditional trigger.
+            c.execute_batch("DROP TRIGGER content_update;
+                CREATE TRIGGER content_update AFTER UPDATE ON content_items BEGIN
+                  INSERT INTO content_fts(content_fts,rowid,text) VALUES('delete',old.entry_id,old.text);
+                  INSERT INTO content_fts(rowid,text) VALUES(new.entry_id,new.text); END;")
+                .unwrap();
+            migrate(&c).unwrap();
+            let before = c.total_changes();
+            c.execute(
+                "UPDATE content_items SET text_limit=text_limit,message='metadata only'",
+                [],
+            )
+            .unwrap();
+            assert_eq!(c.total_changes() - before, 1);
+        }
+        assert_eq!(hits(&e, "original", "content", &scope).total, 1);
+        e.lock()
+            .unwrap()
+            .execute("UPDATE content_items SET text='replacement body'", [])
+            .unwrap();
+        assert_eq!(hits(&e, "original", "content", &scope).total, 0);
+        assert_eq!(hits(&e, "replacement", "content", &scope).total, 1);
+        e.lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO content_fts(content_fts,rank) VALUES('integrity-check',1)",
+                [],
+            )
+            .unwrap();
     }
 
     #[test]

@@ -1098,7 +1098,7 @@ dependencies = [
 
 [[package]]
 name = "filem-core"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "anyhow",
  "calamine",
@@ -1127,7 +1127,7 @@ dependencies = [
 
 [[package]]
 name = "filem-desktop"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "filem-core",
  "serde_json",
@@ -1138,7 +1138,7 @@ dependencies = [
 
 [[package]]
 name = "filem-dev"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "anyhow",
  "axum",

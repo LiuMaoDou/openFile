@@ -35,7 +35,7 @@ export default defineConfig({
     proxy: process.env.FILEM_DEV_TOKEN
       ? {
           "/api": {
-            target: "http://127.0.0.1:4318",
+            target: `http://127.0.0.1:${process.env.FILEM_DEV_PORT || "4318"}`,
             headers: { authorization: `Bearer ${process.env.FILEM_DEV_TOKEN}` },
           },
         }

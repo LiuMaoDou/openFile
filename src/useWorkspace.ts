@@ -16,9 +16,19 @@ export function useWorkspace(query: Query) {
     offset: 0,
   });
   const [connected, setConnected] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setErrorState] = useState<{
+    message: string;
+    source: "summary" | "query" | "action";
+  } | null>(null);
+  const setError = useCallback(
+    (message: string) =>
+      setErrorState(message ? { message, source: "action" } : null),
+    [],
+  );
   const [loading, setLoading] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [reconnectKey, setReconnectKey] = useState(0);
+  const connectionFailed = useRef(false);
   const refresh = useCallback(() => setRefreshKey((key) => key + 1), []);
   useEffect(() => {
     let stopped = false;
@@ -49,12 +59,19 @@ export function useWorkspace(query: Query) {
               : next,
           );
           setConnected(true);
+          setErrorState((current) =>
+            current?.source === "summary" ? null : current,
+          );
+          if (connectionFailed.current) {
+            connectionFailed.current = false;
+            setReconnectKey((key) => key + 1);
+          }
         }
       } catch (error) {
         if (!stopped) {
+          connectionFailed.current = true;
           setConnected(false);
-          setError(errorText(error));
-          setLoading(false);
+          setErrorState({ message: errorText(error), source: "summary" });
         }
       }
       if (!stopped) timer = setTimeout(poll, 1200);
@@ -77,11 +94,14 @@ export function useWorkspace(query: Query) {
         if (sequence.current === current) {
           setResult(next);
           setLoading(false);
+          setErrorState((current) =>
+            current?.source === "query" ? null : current,
+          );
         }
       })
       .catch((error) => {
         if (!controller.signal.aborted && sequence.current === current) {
-          setError(errorText(error));
+          setErrorState({ message: errorText(error), source: "query" });
           setLoading(false);
         }
       });
@@ -89,6 +109,14 @@ export function useWorkspace(query: Query) {
       controller.abort();
       sequence.current++;
     };
-  }, [query, summary.revision, refreshKey]);
-  return { summary, result, connected, loading, error, setError, refresh };
+  }, [query, summary.revision, refreshKey, reconnectKey]);
+  return {
+    summary,
+    result,
+    connected,
+    loading,
+    error: error?.message ?? "",
+    setError,
+    refresh,
+  };
 }

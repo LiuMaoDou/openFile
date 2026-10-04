@@ -126,22 +126,7 @@ impl Engine {
             Ok(ids.into_iter().collect())
         })();
         match lookup {
-            Ok(ids) => {
-                let mut query = q.clone();
-                query.search.clear();
-                query.candidate_ids = Some(ids);
-                let mut result = self.query_local(&query)?;
-                if result.total == 0 {
-                    let mut local = self.query_local(q)?;
-                    if local.total > 0 {
-                        local.search_notice =
-                            Some("Everything 尚未覆盖这些结果，已使用本地索引。".into());
-                        return Ok(local);
-                    }
-                }
-                result.search_engine = "everything".into();
-                Ok(result)
-            }
+            Ok(ids) => self.query_everything_candidates(q, ids),
             Err(error) => {
                 let mut result = self.query_local(q)?;
                 result.search_notice =
@@ -149,6 +134,22 @@ impl Engine {
                 Ok(result)
             }
         }
+    }
+    fn query_everything_candidates(&self, q: &Query, ids: Vec<String>) -> Result<QueryResult> {
+        let mut query = q.clone();
+        // Candidate IDs preserve the SDK's literal/path-alias matching. Keep
+        // the original search text so local relevance sorting can still use it.
+        query.candidate_ids = Some(ids);
+        let mut result = self.query_local(&query)?;
+        if result.total == 0 {
+            let mut local = self.query_local(q)?;
+            if local.total > 0 {
+                local.search_notice = Some("Everything 尚未覆盖这些结果，已使用本地索引。".into());
+                return Ok(local);
+            }
+        }
+        result.search_engine = "everything".into();
+        Ok(result)
     }
 }
 #[cfg(windows)]
@@ -424,6 +425,53 @@ fn helper() -> Result<Reply> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn sdk_candidates_keep_relevance_and_sdk_literal_matching() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("source");
+        std::fs::create_dir(&root).unwrap();
+        for name in ["draft", "a draft notes.txt", "aliased-path.txt"] {
+            std::fs::write(root.join(name), "body").unwrap();
+        }
+        let e = Engine::open(temp.path().join("state/index.sqlite")).unwrap();
+        e.add_scope(ScopeInput {
+            content_enabled: false,
+            path: root.to_str().unwrap().into(),
+            recursive: true,
+            watch: false,
+            excludes: vec![],
+        })
+        .unwrap();
+        let start = std::time::Instant::now();
+        while e.summary().unwrap().scopes[0].freshness != "current" {
+            assert!(start.elapsed() < std::time::Duration::from_secs(5));
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let ids = e
+            .query_local(&Query::default())
+            .unwrap()
+            .entries
+            .into_iter()
+            .map(|entry| entry.id)
+            .collect();
+        let query = Query {
+            search: "draft".into(),
+            sort: "relevance".into(),
+            ..Default::default()
+        };
+        let result = e.query_everything_candidates(&query, ids).unwrap();
+        assert_eq!(result.search_engine, "everything");
+        assert_eq!(result.entries[0].name, "draft");
+        assert_eq!(result.entries[1].name, "a draft notes.txt");
+        // SDK matching can include an 8.3 path alias absent from stored names.
+        // Do not narrow the supplied candidates through a second local match.
+        assert_eq!(result.entries[2].name, "aliased-path.txt");
+        let fallback = e.query_everything_candidates(&query, vec![]).unwrap();
+        assert_eq!(fallback.search_engine, "local");
+        assert_eq!(fallback.total, 2);
+        assert!(fallback.search_notice.unwrap().contains("尚未覆盖"));
+    }
+
     #[test]
     fn scoped_regex_quotes_search_metacharacters_and_preserves_unc() {
         let roots = vec![

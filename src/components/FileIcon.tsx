@@ -6,6 +6,14 @@ const icons = import.meta.glob<string>("../assets/file-icons/*.svg", {
   eager: true,
 });
 const suffixes: Record<string, string> = extensions;
+const dateFormatter = new Intl.DateTimeFormat("zh-CN", {
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
 
 export function FileIcon({
   extension,
@@ -55,14 +63,5 @@ export function formatSize(value: number) {
   return `${(value / 1024 ** i).toFixed(1)} ${["B", "KB", "MB", "GB", "TB"][i]}`;
 }
 export function formatDate(value: number) {
-  return value
-    ? new Intl.DateTimeFormat("zh-CN", {
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false,
-      }).format(value)
-    : "—";
+  return value ? dateFormatter.format(value) : "—";
 }

@@ -5,6 +5,7 @@ import { rustEnvironment } from "./runtime.mjs";
 const env = {
   ...rustEnvironment(),
   FILEM_DEV_TOKEN: randomBytes(32).toString("hex"),
+  FILEM_DEV_PORT: process.env.FILEM_DEV_PORT || "4318",
   FILEM_DATA_DIR: process.env.FILEM_DATA_DIR || resolve(".filem"),
 };
 const children = [];
@@ -33,10 +34,12 @@ start("cargo", ["run", "-p", "filem-dev"]);
 let ready = false;
 for (let i = 0; i < 900 && !stopping; i++) {
   try {
-    const res = await fetch("http://127.0.0.1:4318/api/health", {
+    const res = await fetch(`http://127.0.0.1:${env.FILEM_DEV_PORT}/api/health`, {
       headers: { authorization: `Bearer ${env.FILEM_DEV_TOKEN}` },
+      signal: AbortSignal.timeout(1000),
     });
-    if (res.ok) {
+    const health = res.ok ? await res.json() : null;
+    if (health?.ok === true && health.mode === "local-development") {
       ready = true;
       break;
     }

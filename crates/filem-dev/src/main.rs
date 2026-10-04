@@ -81,8 +81,12 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/command", post(command))
         .layer(middleware::from_fn_with_state(state.clone(), authorize))
         .with_state(state);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:4318").await?;
-    println!("FileM Rust 索引服务已启动（仅本机）：127.0.0.1:4318");
+    let port = std::env::var("FILEM_DEV_PORT")
+        .unwrap_or_else(|_| "4318".into())
+        .parse::<std::num::NonZeroU16>()?;
+    let listener =
+        tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port.get())).await?;
+    println!("FileM Rust 索引服务已启动（仅本机）：127.0.0.1:{port}");
     axum::serve(listener, app).await?;
     Ok(())
 }

@@ -59,10 +59,11 @@ export function FileTable({
     result.entries.length > 0 &&
     result.entries.every((e) => selected.has(e.id));
   function toggle(entry: Entry, shift = false) {
+    // State updaters may run after the event has updated the selection anchor.
+    const first = result.entries.findIndex((e) => e.id === anchor.current);
+    const last = result.entries.findIndex((e) => e.id === entry.id);
     setSelected((previous) => {
       const next = new Set(previous);
-      const first = result.entries.findIndex((e) => e.id === anchor.current);
-      const last = result.entries.findIndex((e) => e.id === entry.id);
       if (shift && first >= 0) {
         result.entries
           .slice(Math.min(first, last), Math.max(first, last) + 1)

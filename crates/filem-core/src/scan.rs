@@ -711,7 +711,6 @@ fn run_group_limited(
                     watch_failed: scope.watch && scope.control.watch_failed.load(Ordering::SeqCst),
                     control: Some(&scope.control),
                     limits,
-                    defer_cleanup: false,
                 },
             )
         })();
@@ -730,12 +729,6 @@ fn run_group_limited(
                 )?;
             }
         }
-    }
-    {
-        let mut c = engine.lock()?;
-        let tx = c.transaction()?;
-        db::cleanup(&tx)?;
-        tx.commit()?;
     }
     run.finish(if scopes.iter().all(|s| !s.live()) {
         "cancelled"
@@ -756,7 +749,6 @@ fn run_group_limited(
 
 struct Completion<'a> {
     limits: Option<&'a [PathBuf]>,
-    defer_cleanup: bool,
     version: i64,
     generation: &'a str,
     failed: &'a [Failure],
@@ -768,7 +760,6 @@ struct Completion<'a> {
 fn finish_scan(engine: &Engine, id: &str, snapshot: Completion<'_>) -> Result<()> {
     let Completion {
         limits,
-        defer_cleanup,
         version,
         generation,
         failed,
@@ -838,9 +829,9 @@ fn finish_scan(engine: &Engine, id: &str, snapshot: Completion<'_>) -> Result<()
             )?;
         }
     }
-    if !defer_cleanup {
-        db::cleanup(&tx)?;
-    }
+    // Remove orphan entries before committing this scope's completion, so
+    // readers never observe files without a display-owning membership.
+    db::cleanup(&tx)?;
     let previous_message: Option<String> = if limits.is_some() {
         tx.query_row("SELECT message FROM scopes WHERE id=?", [id], |r| r.get(0))?
     } else {
@@ -1206,11 +1197,7 @@ pub(crate) fn update_files(
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 // Native byte prefixes preserve path boundaries on Unix and Windows.
-                let mut prefix = path.as_os_str().to_os_string();
-                prefix.push(std::path::MAIN_SEPARATOR_STR);
-                let lower = encode(&prefix);
-                let mut upper = lower.clone();
-                *upper.last_mut().unwrap() += 1;
+                let (lower, upper) = directory_bounds(path);
                 let c = engine.lock()?;
                 let directory: bool = c.query_row(
                     "SELECT EXISTS(SELECT 1 FROM directories WHERE path=? OR (path>=? AND path<?))",
@@ -1611,7 +1598,6 @@ mod candidate_tests {
         // Snapshot represents a scan that already visited the previously empty target.
         let snapshot = Completion {
             limits: None,
-            defer_cleanup: false,
             version,
             generation: "before-move",
             failed: &[],

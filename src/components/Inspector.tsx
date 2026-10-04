@@ -25,12 +25,20 @@ export function Inspector({
     truncated: boolean;
   } | null>(null);
   const [loading, setLoading] = useState(false);
-  const request = useRef(0);
+  const request = useRef<AbortController | null>(null);
   useEffect(() => {
-    request.current++;
     setPreview(null);
     setLoading(false);
-  }, [entry.id, entry.mtime, entry.size, entry.online, search]);
+    return () => request.current?.abort();
+  }, [
+    entry.id,
+    entry.mtime,
+    entry.size,
+    entry.online,
+    entry.placeholder,
+    entry.contentReady,
+    search,
+  ]);
   const textType = [
     "txt",
     "md",
@@ -56,18 +64,21 @@ export function Inspector({
   ].includes(entry.extension);
   const indexed = entry.contentReady;
   async function loadPreview() {
-    const sequence = ++request.current;
+    request.current?.abort();
+    const controller = new AbortController();
+    request.current = controller;
     setLoading(true);
     try {
       const result = await command<{ text: string; truncated: boolean }>(
         indexed ? "content_preview" : "preview_text",
         { id: entry.id, search },
+        controller.signal,
       );
-      if (request.current === sequence) setPreview(result);
+      if (!controller.signal.aborted) setPreview(result);
     } catch (error) {
-      fail(errorText(error));
+      if (!controller.signal.aborted) fail(errorText(error));
     } finally {
-      if (request.current === sequence) setLoading(false);
+      if (!controller.signal.aborted) setLoading(false);
     }
   }
   return (

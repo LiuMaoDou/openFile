@@ -1,7 +1,10 @@
 use crate::{model::*, platform::*};
 use anyhow::{bail, Result};
 use rusqlite::{params, params_from_iter, types::Value, Connection, OpenFlags, OptionalExtension};
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 pub fn connect_reader(path: &Path) -> Result<Connection> {
     let c = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
@@ -146,6 +149,14 @@ pub fn summary_for(c: &Connection, scope_id: &str, hidden: bool) -> Result<Summa
             .collect::<rusqlite::Result<_>>()?;
         Ok(result)
     }
+    let (total, hidden_count, size) = c.query_row(
+        "SELECT COUNT(CASE WHEN e.hidden=0 AND d.hidden=0 THEN 1 END),
+            COUNT(CASE WHEN e.hidden=1 OR d.hidden=1 THEN 1 END),
+            COALESCE(SUM(CASE WHEN e.hidden=0 AND d.hidden=0 THEN e.size ELSE 0 END),0)
+         FROM entries e JOIN directories d ON d.id=e.dir_id",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
     Ok(Summary {
         hidden_directories: crate::hidden::list(c)?,
         scan_runs: Vec::new(),
@@ -153,17 +164,9 @@ pub fn summary_for(c: &Connection, scope_id: &str, hidden: bool) -> Result<Summa
         facet_scope_id: scope_id.into(),
         facet_hidden: hidden,
         scopes: scopes(c)?,
-        total: c.query_row("SELECT COUNT(*) FROM entries e JOIN directories d ON d.id=e.dir_id WHERE e.hidden=0 AND d.hidden=0", [], |r| {
-            r.get(0)
-        })?,
-        hidden: c.query_row("SELECT COUNT(*) FROM entries e JOIN directories d ON d.id=e.dir_id WHERE e.hidden=1 OR d.hidden=1", [], |r| {
-            r.get(0)
-        })?,
-        size: c.query_row(
-            "SELECT COALESCE(SUM(size),0) FROM entries e JOIN directories d ON d.id=e.dir_id WHERE e.hidden=0 AND d.hidden=0",
-            [],
-            |r| r.get(0),
-        )?,
+        total,
+        hidden: hidden_count,
+        size,
         extensions: buckets(c, "extension", false, scope_id)?,
         hidden_extensions: buckets(c, "extension", true, scope_id)?,
         groups: buckets(c, "group_name", hidden, scope_id)?,
@@ -199,7 +202,10 @@ pub fn query(c: &Connection, q: &Query) -> Result<QueryResult> {
         conditions.push("e.group_name=?".into());
         values.push(q.group.clone().into());
     }
-    if !q.search.is_empty() {
+    // Everything's authorized candidates already matched its filename/path
+    // search. Keep the original text for relevance without applying a second,
+    // potentially different SQLite substring filter to that candidate set.
+    if !q.search.is_empty() && q.candidate_ids.is_none() {
         let terms = if q.match_mode == "keywords" {
             crate::search::terms(&q.search)
         } else {
@@ -280,28 +286,34 @@ pub fn query(c: &Connection, q: &Query) -> Result<QueryResult> {
     values.push(Value::Integer(q.offset.min(i64::MAX as usize) as i64));
     let sql=format!("SELECT e.id,e.name,d.path,e.native_name,e.extension,e.group_name,e.size,e.mtime,(e.hidden OR d.hidden),e.attributes,
       (SELECT s.id FROM scopes s JOIN memberships m ON s.id=m.scope_id WHERE m.entry_id=e.id ORDER BY s.depth DESC,s.id LIMIT 1),
-      EXISTS(SELECT 1 FROM memberships m JOIN scopes s ON s.id=m.scope_id WHERE m.entry_id=e.id AND s.availability='available'),d.hidden
+      EXISTS(SELECT 1 FROM memberships m JOIN scopes s ON s.id=m.scope_id WHERE m.entry_id=e.id AND s.availability='available'),d.hidden,
+      EXISTS(SELECT 1 FROM content_items ci WHERE ci.entry_id=e.id AND ci.state='ready')
       {from} ORDER BY {relevance}{sort} {direction},e.id ASC LIMIT ? OFFSET ?");
     let mut stmt = c.prepare(&sql)?;
     let mut rows = stmt.query(params_from_iter(values.iter()))?;
     let mut entries = Vec::new();
+    let mut scope_details = HashMap::new();
+    let mut find_scope = c.prepare_cached("SELECT root,name FROM scopes WHERE id=?")?;
     while let Some(r) = rows.next()? {
         let directory = PathBuf::from(decode(&r.get::<_, Vec<u8>>(2)?));
         let native_name = decode(&r.get::<_, Vec<u8>>(3)?);
         let scope_id: String = r.get(10)?;
-        let (root_bytes, scope_name): (Vec<u8>, String) = c
-            .prepare_cached("SELECT root,name FROM scopes WHERE id=?")?
-            .query_row([&scope_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
-        let scope_root = PathBuf::from(decode(&root_bytes));
-        let scope_name = display_path_text(&scope_name);
-        let relative = directory.strip_prefix(&scope_root).unwrap_or(&directory);
+        let (scope_root, scope_name) = match scope_details.entry(scope_id.clone()) {
+            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                let (root_bytes, name): (Vec<u8>, String) =
+                    find_scope.query_row([&scope_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+                entry.insert((PathBuf::from(decode(&root_bytes)), display_path_text(&name)))
+            }
+        };
+        let relative = directory.strip_prefix(&*scope_root).unwrap_or(&directory);
         entries.push(Entry {
-            content_ready: c.query_row("SELECT EXISTS(SELECT 1 FROM content_items ci WHERE ci.entry_id=? AND ci.state='ready')", [r.get::<_,i64>(0)?], |r|r.get(0))?,
+            content_ready: r.get(13)?,
             snippet: None,
             id: r.get::<_, i64>(0)?.to_string(),
             name: r.get(1)?,
             path: display_path(&directory.join(native_name)),
-            directory: scoped_directory(&scope_name, relative),
+            directory: scoped_directory(scope_name, relative),
             directory_path: display_path(&directory),
             extension: r.get(4)?,
             group: r.get(5)?,
@@ -311,7 +323,7 @@ pub fn query(c: &Connection, q: &Query) -> Result<QueryResult> {
             directory_hidden: r.get(12)?,
             placeholder: placeholder(r.get::<_, u32>(9)?),
             scope_id,
-            scope_name,
+            scope_name: scope_name.clone(),
             online: r.get(11)?,
         });
     }
@@ -324,8 +336,15 @@ pub fn query(c: &Connection, q: &Query) -> Result<QueryResult> {
             vec![q.search.clone()]
         };
         let terms_json = serde_json::to_string(&terms)?;
+        let longest_term = terms.iter().map(|s| s.chars().count()).max().unwrap_or(0) as i64;
+        let mut find_snippet = c.prepare_cached("SELECT substr(ci.text,max(1,coalesce((SELECT min(nullif(instr(lower(ci.text),lower(value)),0)) FROM json_each(?)),1)-45),?+190),ci.truncated FROM content_items ci JOIN entries e ON e.id=ci.entry_id WHERE e.id=? AND ci.state='ready' AND ci.identity=e.identity AND ci.size=e.size AND ci.mtime=e.mtime AND EXISTS(SELECT 1 FROM memberships m JOIN scopes s ON s.id=m.scope_id WHERE m.entry_id=e.id AND s.content_enabled=1 AND (?='' OR s.id=?))")?;
         for entry in &mut entries {
-            let text: Option<(String,bool)> = c.query_row("SELECT substr(ci.text,max(1,coalesce((SELECT min(nullif(instr(lower(ci.text),lower(value)),0)) FROM json_each(?)),1)-45),?+190),ci.truncated FROM content_items ci JOIN entries e ON e.id=ci.entry_id WHERE e.id=? AND ci.state='ready' AND ci.identity=e.identity AND ci.size=e.size AND ci.mtime=e.mtime AND EXISTS(SELECT 1 FROM memberships m JOIN scopes s ON s.id=m.scope_id WHERE m.entry_id=e.id AND s.content_enabled=1 AND (?='' OR s.id=?))", params![terms_json,terms.iter().map(|s|s.chars().count()).max().unwrap_or(0) as i64,entry.id,q.scope_id,q.scope_id], |r|Ok((r.get(0)?,r.get(1)?))).optional()?;
+            let text: Option<(String, bool)> = find_snippet
+                .query_row(
+                    params![terms_json, longest_term, entry.id, q.scope_id, q.scope_id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?;
             if let Some((text, truncated)) = text {
                 entry.snippet = terms
                     .iter()
@@ -387,6 +406,137 @@ pub fn entry_path(c: &Connection, id: &str) -> Result<(PathBuf, String, u64, i64
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn populated_index() -> Connection {
+        let c = connect(Path::new(":memory:")).unwrap();
+        for (id, root, name, depth, available) in [
+            ("parent", "root", "Parent", 1, "available"),
+            ("child", "root/child", "Child", 2, "offline"),
+        ] {
+            c.execute(
+                "INSERT INTO scopes(id,root,path,name,identity,depth,recursive,watch,excludes,availability,content_enabled)
+                 VALUES(?,?,?,?, 'scope',?,1,0,'[]',?,1)",
+                params![id, encode(Path::new(root).as_os_str()), root, name, depth, available],
+            ).unwrap();
+        }
+        for (id, path, hidden) in [
+            (1, "root", false),
+            (2, "root/child", false),
+            (3, "root/private", true),
+        ] {
+            c.execute(
+                "INSERT INTO directories(id,path,display,hidden) VALUES(?,?,?,?)",
+                params![id, encode(Path::new(path).as_os_str()), path, hidden],
+            )
+            .unwrap();
+        }
+        for (id, directory, name, hidden) in [
+            (1, 1, "a.txt", false),
+            (2, 2, "b.txt", false),
+            (3, 1, "c.txt", true),
+            (4, 3, "d.txt", false),
+            (5, 3, "e.txt", true),
+            (6, 2, "f.md", false),
+        ] {
+            c.execute(
+                "INSERT INTO entries(id,dir_id,native_name,name,extension,group_name,size,mtime,identity,attributes,hidden)
+                 VALUES(?,?,?,?,?,'文档',?,0,'file',0,?)",
+                params![id, directory, encode(Path::new(name).as_os_str()), name, extension(name), id * 10, hidden],
+            ).unwrap();
+            c.execute(
+                "INSERT INTO memberships(scope_id,entry_id,generation) VALUES('parent',?,'test')",
+                [id],
+            )
+            .unwrap();
+            if directory == 2 {
+                c.execute(
+                    "INSERT INTO memberships(scope_id,entry_id,generation) VALUES('child',?,'test')",
+                    [id],
+                ).unwrap();
+            }
+        }
+        c.execute_batch(
+            "INSERT INTO content_items(entry_id,identity,size,mtime,state,text,indexed_at) VALUES
+                (1,'file',10,0,'ready','first needle result',0),
+                (2,'file',20,0,'ready','second needle result',0),
+                (6,'file',60,0,'pending','',0);",
+        )
+        .unwrap();
+        c
+    }
+
+    #[test]
+    fn summary_aggregates_empty_and_overlapping_hidden_states() {
+        let empty = connect(Path::new(":memory:")).unwrap();
+        let summary = summary_for(&empty, "", false).unwrap();
+        assert_eq!((summary.total, summary.hidden, summary.size), (0, 0, 0));
+
+        let c = populated_index();
+        let summary = summary_for(&c, "child", false).unwrap();
+        assert_eq!((summary.total, summary.hidden, summary.size), (3, 3, 90));
+        assert_eq!(summary.extensions.iter().map(|b| b.count).sum::<u64>(), 2);
+        assert!(summary.hidden_extensions.is_empty());
+        let hidden = summary_for(&c, "", true).unwrap();
+        assert_eq!(hidden.groups.iter().map(|b| b.count).sum::<u64>(), 3);
+    }
+
+    #[test]
+    fn query_preserves_scope_ownership_readiness_and_per_entry_snippets() {
+        let c = populated_index();
+        let results = query(&c, &Query::default()).unwrap();
+        assert_eq!(results.total, 3);
+        assert_eq!(
+            results
+                .entries
+                .iter()
+                .map(|entry| entry.scope_name.as_str())
+                .collect::<Vec<_>>(),
+            ["Parent", "Child", "Child"]
+        );
+        assert_eq!(
+            results
+                .entries
+                .iter()
+                .map(|entry| entry.content_ready)
+                .collect::<Vec<_>>(),
+            [true, true, false]
+        );
+        assert!(results.entries.iter().all(|entry| entry.online));
+        assert_eq!(results.entries[1].directory, "Child");
+        assert_eq!(
+            results.entries[1].directory_path,
+            display_path(Path::new("root/child"))
+        );
+
+        let results = query(
+            &c,
+            &Query {
+                search: "needle".into(),
+                search_mode: "content".into(),
+                ..Query::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(results.total, 2);
+        for (entry, prefix) in results.entries.iter().zip(["first ", "second "]) {
+            let snippet = entry.snippet.as_ref().unwrap();
+            assert_eq!(snippet.before, prefix);
+            assert_eq!(snippet.matched, "needle");
+        }
+        let child = query(
+            &c,
+            &Query {
+                scope_id: "child".into(),
+                offset: 1,
+                limit: 1,
+                ..Query::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(child.total, 2);
+        assert_eq!(child.entries.len(), 1);
+        assert_eq!(child.entries[0].name, "f.md");
+    }
 
     #[test]
     fn v4_directory_migration_preserves_individual_hidden_state() {

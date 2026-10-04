@@ -477,16 +477,22 @@ impl Engine {
     pub fn update_scope(&self, id: &str, input: ScopeInput) -> Result<()> {
         rules::Excludes::new(&input.excludes)?;
         {
-            let c = self.lock()?;
-            let (stored_root, _, _, old) = db::root(&c, id)?;
+            let mut c = self.lock()?;
+            let tx = c.transaction()?;
+            let (stored_root, _, _, old) = db::root(&tx, id)?;
             if old.path != input.path && checked_root(Path::new(&input.path))? != stored_root {
                 bail!("重新定位请移除旧文件夹后，选择新的根目录。");
             }
-            c.execute("DELETE FROM content_items WHERE entry_id IN (SELECT entry_id FROM memberships WHERE scope_id=?)", [id])?;
-            c.execute("UPDATE scopes SET recursive=?,watch=?,excludes=?,content_enabled=?,content_epoch=content_epoch+1,config_version=config_version+1 WHERE id=?",params![input.recursive,input.watch,serde_json::to_string(&input.excludes)?,input.content_enabled,id])?;
-            db::bump(&c)?;
+            // Listener settings do not change file contents. Keep ready text and
+            // failed/skipped results unless membership rules actually change.
+            // Shared text must also survive edits to another scope's rules.
+            if old.recursive != input.recursive || old.excludes != input.excludes {
+                tx.execute("DELETE FROM content_items WHERE entry_id IN (SELECT entry_id FROM memberships WHERE scope_id=?) AND NOT EXISTS (SELECT 1 FROM memberships m JOIN scopes s ON s.id=m.scope_id WHERE m.entry_id=content_items.entry_id AND s.id<>? AND s.content_enabled=1)", params![id, id])?;
+            }
+            tx.execute("UPDATE scopes SET recursive=?,watch=?,excludes=?,content_enabled=?,content_epoch=content_epoch+1,config_version=config_version+1 WHERE id=?",params![input.recursive,input.watch,serde_json::to_string(&input.excludes)?,input.content_enabled,id])?;
+            db::bump(&tx)?;
+            tx.commit()?;
         }
-        self.configure_watch(id)?;
         self.refresh(id)
     }
     pub fn remove_scope(&self, id: &str) -> Result<()> {
@@ -824,6 +830,116 @@ impl Engine {
 #[cfg(test)]
 mod ownership_tests {
     use super::*;
+
+    fn wait_for_scopes(engine: &Engine) {
+        let started = std::time::Instant::now();
+        while engine
+            .summary()
+            .unwrap()
+            .scopes
+            .iter()
+            .any(|scope| scope.freshness != "current")
+        {
+            assert!(started.elapsed() < Duration::from_secs(15));
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    fn scope_settings_preserve_unaffected_and_shared_content() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("files");
+        fs::create_dir_all(root.join("nested")).unwrap();
+        fs::write(root.join("public.txt"), "public").unwrap();
+        fs::write(root.join("nested/shared.txt"), "shared").unwrap();
+        let engine = Engine::open(temp.path().join("state/index.sqlite")).unwrap();
+        let input = |path: &Path| ScopeInput {
+            path: display_path(path),
+            recursive: true,
+            watch: false,
+            excludes: vec![],
+            content_enabled: true,
+        };
+        let parent = engine.add_scope(input(&root)).unwrap();
+        let child = engine.add_scope(input(&root.join("nested"))).unwrap();
+        wait_for_scopes(&engine);
+        engine.lock().unwrap().execute(
+            "INSERT INTO content_items(entry_id,identity,size,mtime,state,text,indexed_at) SELECT id,identity,size,mtime,'ready','audit searchable text',123 FROM entries",
+            [],
+        ).unwrap();
+        let content_count = || {
+            engine
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM content_items WHERE indexed_at=123",
+                    [],
+                    |r| r.get::<_, u64>(0),
+                )
+                .unwrap()
+        };
+        for watch in [true, false, false] {
+            let mut settings = input(&root);
+            settings.watch = watch;
+            engine.update_scope(&parent, settings).unwrap();
+            wait_for_scopes(&engine);
+            assert_eq!(content_count(), 2, "listener-only edits must retain text");
+        }
+        let mut settings = input(&root);
+        settings.excludes.push("nested".into());
+        engine.update_scope(&parent, settings).unwrap();
+        wait_for_scopes(&engine);
+        assert_eq!(
+            content_count(),
+            1,
+            "another enabled scope still owns the text"
+        );
+        let hits = engine
+            .query(&Query {
+                search: "searchable".into(),
+                search_mode: "content".into(),
+                scope_id: child.clone(),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(hits.total, 1);
+        assert_eq!(hits.entries[0].name, "shared.txt");
+        let mut settings = input(&root.join("nested"));
+        settings.content_enabled = false;
+        engine.update_scope(&child, settings).unwrap();
+        assert_eq!(content_count(), 0, "last disabled owner must release text");
+    }
+
+    #[test]
+    fn failed_scope_update_rolls_back_content_invalidation() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("files");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("public.txt"), "public").unwrap();
+        let engine = Engine::open(temp.path().join("state/index.sqlite")).unwrap();
+        let mut settings = ScopeInput {
+            path: display_path(&root),
+            recursive: true,
+            watch: false,
+            excludes: vec![],
+            content_enabled: true,
+        };
+        let id = engine.add_scope(settings.clone()).unwrap();
+        wait_for_scopes(&engine);
+        engine.lock().unwrap().execute_batch(
+            "INSERT INTO content_items(entry_id,identity,size,mtime,state,text,indexed_at) SELECT id,identity,size,mtime,'ready','keep text',123 FROM entries;
+             CREATE TRIGGER reject_scope_update BEFORE UPDATE ON scopes BEGIN SELECT RAISE(ABORT,'test write failure'); END;",
+        ).unwrap();
+        settings.excludes.push("*.txt".into());
+        assert!(engine.update_scope(&id, settings).is_err());
+        let c = engine.lock().unwrap();
+        let text: String = c
+            .query_row("SELECT text FROM content_items", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(text, "keep text");
+        assert!(db::root(&c, &id).unwrap().3.excludes.is_empty());
+    }
+
     #[test]
     fn searches_and_status_read_committed_data_while_a_writer_is_busy() {
         let temp = tempfile::tempdir().unwrap();

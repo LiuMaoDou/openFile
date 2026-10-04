@@ -102,6 +102,37 @@ fn overlapping_scopes_share_walk_but_keep_exclusions_and_recursion() {
 }
 
 #[test]
+fn grouped_completion_removes_orphans_and_preserves_other_scope_entries() {
+    let f = Fixture::new();
+    f.file("child/gone.txt");
+    f.file("unrelated/keep.txt");
+    let parent = f.scope("", true, &["unrelated"]);
+    let child = f.scope("child", true, &[]);
+    let unrelated = f.scope("unrelated", true, &[]);
+    run_group(
+        &f.engine,
+        &[parent.clone(), child.clone(), unrelated.clone()],
+    )
+    .unwrap();
+    fs::remove_file(f.root.join("child/gone.txt")).unwrap();
+    run_group(&f.engine, &[parent, child]).unwrap();
+
+    let results = f.engine.query(&model::Query::default()).unwrap();
+    assert_eq!(results.total, 1);
+    assert_eq!(results.entries[0].name, "keep.txt");
+    assert_eq!(results.entries[0].scope_id, unrelated.0);
+    let c = f.engine.lock().unwrap();
+    let counts: (i64, i64) = c
+        .query_row(
+            "SELECT (SELECT COUNT(*) FROM entries), (SELECT COUNT(*) FROM directories)",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(counts, (1, 1));
+}
+
+#[test]
 fn child_worker_claims_pending_parent_and_does_not_scan_twice() {
     let f = Fixture::new();
     f.file("a.txt");
@@ -167,7 +198,6 @@ fn scan_failures_are_deduplicated_persisted_and_cleared_only_when_rechecked() {
         &scope.0,
         Completion {
             limits: None,
-            defer_cleanup: false,
             version,
             generation: "failed-pass",
             failed: &failures,
@@ -425,7 +455,6 @@ fn cancelled_completion_cannot_delete_old_membership_or_mark_current() {
         &scope.0,
         Completion {
             limits: None,
-            defer_cleanup: false,
             version,
             generation: "cancelled",
             failed: &[],
