@@ -183,6 +183,7 @@ pub struct TextPreview {
 #[serde(rename_all = "camelCase")]
 pub struct DeleteItem {
     pub id: String,
+    pub stale: bool,
     pub name: String,
     pub path: String,
     pub size: u64,

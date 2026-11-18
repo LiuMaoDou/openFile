@@ -100,10 +100,13 @@ impl Engine {
         let mut statement=c.prepare("SELECT entry_id,name,path,size,status,message FROM move_items WHERE operation_id=? ORDER BY ordinal")?;
         let items = statement
             .query_map([id], |r| {
+                let native_path: Vec<u8> = r.get(2)?;
+                let path = PathBuf::from(decode(&native_path));
                 Ok(DeleteItem {
                     id: r.get(0)?,
                     name: r.get(1)?,
-                    path: display_path(&PathBuf::from(decode(&r.get::<_, Vec<u8>>(2)?))),
+                    stale: path.as_os_str().is_empty(),
+                    path: display_path(&path),
                     size: r.get(3)?,
                     status: r.get(4)?,
                     message: r.get(5)?,

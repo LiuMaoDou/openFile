@@ -48,6 +48,15 @@ export default function App() {
   const { summary, result, connected, loading, error, setError, refresh } =
     useWorkspace(query);
   const notify = useCallback((message: string) => setToast(message), []);
+  const clearStaleSelection = useCallback((ids: string[]) => {
+    const stale = new Set(ids);
+    setSelected(
+      (previous) => new Set([...previous].filter((id) => !stale.has(id))),
+    );
+    setActive((previous) =>
+      previous && stale.has(previous.id) ? null : previous,
+    );
+  }, []);
   const change = useCallback((patch: Partial<Query>) => {
     setQuery((previous) => ({
       ...previous,
@@ -591,6 +600,7 @@ export default function App() {
       {moving && (
         <MoveDialog
           ids={moving.ids}
+          staleSelection={clearStaleSelection}
           close={() => setMoving(null)}
           completed={(ids) => {
             const moved = new Set(ids);
@@ -608,6 +618,7 @@ export default function App() {
       {deleting && (
         <DeleteDialog
           ids={deleting.ids}
+          staleSelection={clearStaleSelection}
           close={() => setDeleting(null)}
           completed={(ids) => {
             const removed = new Set(ids);

@@ -130,6 +130,8 @@ export interface QueryResult {
 }
 export interface DeleteItem {
   id: string;
+  /** This selected ID no longer resolves to an indexed entry. */
+  stale: boolean;
   name: string;
   path: string;
   size: number;

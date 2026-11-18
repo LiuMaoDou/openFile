@@ -18,6 +18,7 @@ export function DeleteDialog({
   ids,
   close,
   completed,
+  staleSelection,
   action = "delete",
   destination,
 }: {
@@ -26,6 +27,7 @@ export function DeleteDialog({
   destination?: string;
   close: () => void;
   completed: (ids: string[]) => void;
+  staleSelection?: (ids: string[]) => void;
 }) {
   const moving = action === "move";
   const verb = moving ? "移动" : "删除";
@@ -34,6 +36,9 @@ export function DeleteDialog({
   const alive = useRef(true);
   const completedRef = useRef(completed);
   completedRef.current = completed;
+  const staleSelectionRef = useRef(staleSelection);
+  staleSelectionRef.current = staleSelection;
+  const [notice, setNotice] = useState("");
   const [plan, setPlan] = useState<DeletePlan | null>(null);
   const [history, setHistory] = useState<DeletePlan[]>([]);
   const [loading, setLoading] = useState(true);
@@ -42,6 +47,9 @@ export function DeleteDialog({
   const [error, setError] = useState("");
   const [expired, setExpired] = useState(false);
   const busy = executing || plan?.state === "running";
+  function visiblePlan(next: DeletePlan): DeletePlan {
+    return ids ? { ...next, items: next.items.filter((item) => !item.stale) } : next;
+  }
   const ready =
     plan?.items.filter((item) => item.status === "ready").length ?? 0;
   const succeeded =
@@ -62,7 +70,18 @@ export function DeleteDialog({
             ids,
             destination,
           });
-          if (!ignore) setPlan(value);
+          if (!ignore) {
+            const stale = value.items
+              .filter((item) => item.stale)
+              .map((item) => item.id);
+            if (stale.length) {
+              staleSelectionRef.current?.(stale);
+              setNotice(
+                `已从选择中清理 ${stale.length} 个索引失效文件，请重新选择需要操作的文件。`,
+              );
+            }
+            setPlan(visiblePlan(value));
+          }
         } else {
           const values = await command<DeletePlan[]>(`${action}_history`);
           if (!ignore) {
@@ -107,7 +126,7 @@ export function DeleteDialog({
         }
         setPlan((current) =>
           current?.id === next.id && current.state === "running"
-            ? next
+            ? visiblePlan(next)
             : current,
         );
         if (next.state !== "running") {
@@ -140,7 +159,7 @@ export function DeleteDialog({
       const result = await command<DeletePlan>(`execute_${action}`, {
         id: plan.id,
       });
-      if (alive.current) setPlan(result);
+      if (alive.current) setPlan(visiblePlan(result));
       completedRef.current(
         result.items
           .filter((item) => item.status === "succeeded")
@@ -155,7 +174,7 @@ export function DeleteDialog({
           const next = await command<DeletePlan>(`${action}_plan`, {
             id: plan.id,
           });
-          if (alive.current) setPlan(next);
+          if (alive.current) setPlan(visiblePlan(next));
         } catch {
           /* Keep the last known result when disconnected. */
         }
@@ -213,6 +232,7 @@ export function DeleteDialog({
         </button>
       </header>
       <div className="dialog-body delete-body">
+        {notice && <p className="inline-info" role="status">{notice}</p>}
         {!ids && history.length > 0 && (
           <label className="field">
             最近 10 批操作
@@ -248,7 +268,7 @@ export function DeleteDialog({
         ) : !plan && !error ? (
           <p className="delete-empty">暂无{verb}记录</p>
         ) : null}
-        {plan && (
+        {plan && plan.items.length > 0 && (
           <>
             {moving && (
               <p className="move-destination">

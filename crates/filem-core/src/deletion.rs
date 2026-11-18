@@ -75,10 +75,12 @@ impl Engine {
         let mut s = c.prepare("SELECT entry_id,name,path,size,status,message FROM operation_items WHERE operation_id=? ORDER BY ordinal")?;
         let items = s
             .query_map([id], |r| {
+                let path: String = r.get(2)?;
                 Ok(DeleteItem {
                     id: r.get(0)?,
                     name: r.get(1)?,
-                    path: display_path_text(&r.get::<_, String>(2)?),
+                    stale: path.is_empty(),
+                    path: display_path_text(&path),
                     size: r.get(3)?,
                     status: r.get(4)?,
                     message: r.get(5)?,
@@ -363,6 +365,26 @@ mod tests {
         assert_eq!(entries[0].id, ids[1]);
         assert!(e.checked_entry(&ids[0]).is_err());
         assert_eq!(e.preview_text(&ids[1]).unwrap().text, "beta");
+    }
+
+    #[test]
+    fn missing_index_ids_are_distinguishable_from_unavailable_files() {
+        let (_temp, engine, root, _scope, ids) = fixture();
+        fs::remove_file(root.join("b.txt")).unwrap();
+        let missing = "83259316".to_string();
+        let plan = engine
+            .preview_delete(&[missing.clone(), ids[0].clone(), ids[1].clone()])
+            .unwrap();
+        assert_eq!(plan.items.len(), 3);
+        assert_eq!(plan.items[0].id, missing);
+        assert_eq!(plan.items[0].status, "blocked");
+        assert!(plan.items[0].stale);
+        assert!(plan.items[0].path.is_empty());
+        assert_eq!(plan.items[1].status, "ready");
+        assert!(!plan.items[1].stale);
+        assert_eq!(plan.items[2].status, "blocked");
+        assert!(!plan.items[2].stale);
+        assert!(root.join("a.txt").exists());
     }
 
     #[test]

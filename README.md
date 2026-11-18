@@ -2,15 +2,15 @@
 
 按用户指定的盘或文件夹聚合相同扩展名文件。索引、筛选和隐藏只改变本地视图，源文件保持原位。
 
-当前版本：**0.1.14 开发验证版**。Rust + SQLite 核心、React 界面与 Tauri 2 桌面壳已实现；Windows 实机验证仍待执行，不能视为 M0/M1 全量验收通过。
+当前版本：**0.1.15 开发验证版**。Rust + SQLite 核心、React 界面与 Tauri 2 桌面壳已实现；Windows 实机验证仍待执行，不能视为 M0/M1 全量验收通过。
 
 ## Windows 直接运行
 
-本次 **0.1.14 仅发布 Windows x64 便携版**。0.1.13 及更早版本的安装包保留在历史 Releases；新版本不发布 Mac 安装文件。
+本次 **0.1.15 发布 Windows x64 安装版与便携版**。旧版本保留在历史 Releases；本次不发布 Mac 安装文件。
 
-**[下载 Windows 便携 ZIP](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.14/FileM-0.1.14-windows-x64-portable.zip)** · [版本说明与校验值](https://github.com/LiuMaoDou/openFile/releases/tag/v0.1.14)
+**[下载 Windows 安装包](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.15/FileM_0.1.15_x64-setup.exe)** · **[下载 Windows 便携 ZIP](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.15/FileM-0.1.15-windows-x64-portable.zip)** · [版本说明与校验值](https://github.com/LiuMaoDou/openFile/releases/tag/v0.1.15)
 
-Windows 11 x64 用户完整解压 `FileM-0.1.14-windows-x64-portable.zip` 后双击 `FileM.exe`。使用者无需安装 Node.js、Rust 或 Visual Studio。便携版使用系统 WebView2；缺少时请先安装 [Microsoft WebView2 Evergreen Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)。索引仍保存在用户应用数据目录或已设置的索引位置。使用步骤和版本边界见 [Windows 使用说明](docs/Windows_使用说明.md)、[0.1.14 更新说明](docs/0.1.14_更新说明.md) 和 [0.1.13 搜索更新说明](docs/0.1.13_更新说明.md)。分发包通过 GitHub Releases 下载，构建产物不纳入源码版本控制。Release 页面中的 Source code 是源码压缩包，不能直接双击运行；Packages 栏目不用于此应用的下载。
+Windows 11 x64 用户可运行 `FileM_0.1.15_x64-setup.exe` 安装，或完整解压 `FileM-0.1.15-windows-x64-portable.zip` 后双击 `FileM.exe`。使用者无需安装 Node.js、Rust 或 Visual Studio。便携版使用系统 WebView2；缺少时请先安装 [Microsoft WebView2 Evergreen Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)。索引仍保存在用户应用数据目录或已设置的索引位置。使用步骤和版本边界见 [Windows 使用说明](docs/Windows_使用说明.md)、[0.1.15 更新说明](docs/0.1.15_更新说明.md) 和 [0.1.14 更新说明](docs/0.1.14_更新说明.md)。分发包通过 GitHub Releases 下载，构建产物不纳入源码版本控制。Release 页面中的 Source code 是源码压缩包，不能直接双击运行；Packages 栏目不用于此应用的下载。
 
 ## 外观主题
 

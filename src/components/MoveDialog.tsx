@@ -6,10 +6,12 @@ export function MoveDialog({
   ids,
   close,
   completed,
+  staleSelection,
 }: {
   ids?: string[];
   close: () => void;
   completed: (ids: string[]) => void;
+  staleSelection?: (ids: string[]) => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [path, setPath] = useState("");
@@ -26,6 +28,7 @@ export function MoveDialog({
         destination={destination ?? undefined}
         close={close}
         completed={completed}
+        staleSelection={staleSelection}
       />
     );
   return (

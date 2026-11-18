@@ -1,0 +1,96 @@
+name: Publish FileM Windows
+
+on:
+  workflow_run:
+    workflows: ["Check FileM"]
+    branches: [main]
+    types: [completed]
+  workflow_dispatch:
+
+jobs:
+  windows_release:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.conclusion == 'success')
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: Check whether this version needs publishing
+        id: version
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = (Get-Content -Raw 'src-tauri/tauri.conf.json' | ConvertFrom-Json).version
+          $npmVersion = (Get-Content -Raw 'package.json' | ConvertFrom-Json).version
+          if ($version -ne $npmVersion) { throw 'App and npm versions differ' }
+          $tag = "v$version"
+          $releases = gh release list --repo $env:GITHUB_REPOSITORY --json tagName --limit 100 | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Could not list existing GitHub Releases' }
+          $exists = @($releases | Where-Object { $_.tagName -eq $tag }).Count -gt 0
+          $publish = if ($exists) { 'false' } else { 'true' }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "publish=$publish" >> $env:GITHUB_OUTPUT
+      - name: Install dependencies
+        if: steps.version.outputs.publish == 'true'
+        run: npm ci
+      - name: Build Windows x64 executable and NSIS installer
+        if: steps.version.outputs.publish == 'true'
+        run: npm run windows:build
+      - name: Package portable build and checksums
+        if: steps.version.outputs.publish == 'true'
+        shell: pwsh
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          $binDir = 'target/x86_64-pc-windows-msvc/release'
+          $exe = @("$binDir/FileM.exe", "$binDir/filem-desktop.exe") |
+            Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $exe) { throw 'Windows executable not found' }
+          New-Item -ItemType Directory -Path 'release' -Force | Out-Null
+          Copy-Item $exe 'release/FileM.exe'
+          $portable = "FileM-$version-windows-x64-portable.zip"
+          Compress-Archive -Path 'release/FileM.exe' -DestinationPath "release/$portable" -Force
+          Remove-Item 'release/FileM.exe'
+          $nsisDir = "$binDir/bundle/nsis"
+          $installer = Get-ChildItem $nsisDir -Filter '*setup.exe' -File | Select-Object -First 1
+          if (-not $installer) { throw 'NSIS installer not found' }
+          $installerName = "FileM_${version}_x64-setup.exe"
+          Copy-Item $installer.FullName "release/$installerName"
+          @($portable, $installerName) | ForEach-Object {
+            $hash = (Get-FileHash -Algorithm SHA256 "release/$_").Hash.ToLowerInvariant()
+            "$hash  $_"
+          } | Set-Content -Path 'release/SHA256SUMS.txt' -Encoding utf8
+      - name: Preserve Windows build artifacts
+        if: steps.version.outputs.publish == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: FileM-Windows-x64-${{ steps.version.outputs.version }}
+          path: release/*
+          if-no-files-found: error
+      - name: Publish Windows release
+        if: steps.version.outputs.publish == 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          $assets = @(
+            "release/FileM-$version-windows-x64-portable.zip",
+            "release/FileM_${version}_x64-setup.exe",
+            'release/SHA256SUMS.txt'
+          )
+          gh release create "v$version" @assets --repo $env:GITHUB_REPOSITORY --target $env:RELEASE_SHA --title "FileM $version · Windows 失效文件选择修复" --notes-file 'docs/0.1.15_更新说明.md' --latest
