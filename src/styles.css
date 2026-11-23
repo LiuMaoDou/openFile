@@ -538,7 +538,6 @@ main {
 .table-grid {
   display: grid;
   grid-template-columns: var(--file-table-columns);
-
   align-items: center;
   gap: 12px;
   padding: 0 28px;
