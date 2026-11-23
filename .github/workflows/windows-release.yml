@@ -1,6 +1,9 @@
 name: Publish FileM Windows
 
 on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/windows-release.yml"]
   workflow_run:
     workflows: ["Check FileM"]
     branches: [main]
@@ -10,6 +13,7 @@ on:
 jobs:
   windows_release:
     if: >-
+      github.event_name == 'push' ||
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.event == 'push' &&
        github.event.workflow_run.head_branch == 'main' &&
