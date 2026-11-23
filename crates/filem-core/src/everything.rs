@@ -332,18 +332,16 @@ fn query_pattern(roots: &[Vec<u16>], short_roots: &[Vec<u16>], search: &str) -> 
 }
 /// Called before starting Tauri or the development server. It never opens or changes files.
 pub fn run_helper_if_requested() -> bool {
-    if std::env::args().nth(1).as_deref() != Some("--filem-everything-helper") {
-        return false;
-    }
+    let requested = std::env::args().nth(1).as_deref() == Some("--filem-everything-helper");
     #[cfg(windows)]
-    {
+    if requested {
         let reply = helper().unwrap_or_else(|e| Reply {
             error: Some(format!("{e:#}")),
             ..Default::default()
         });
         let _ = serde_json::to_writer(std::io::stdout(), &reply);
     }
-    true
+    requested
 }
 #[cfg(windows)]
 fn helper() -> Result<Reply> {
