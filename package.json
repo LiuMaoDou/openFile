@@ -11,7 +11,7 @@
     "windows:build": "node scripts/windows-build.mjs",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b",
-    "test:ui": "node --test scripts/test-scan-status.mjs",
+    "test:ui": "node --experimental-strip-types --test scripts/test-scan-status.mjs scripts/test-file-table-columns.mjs",
     "test": "node scripts/cargo.mjs test --workspace --exclude filem-desktop",
     "check:rust": "node scripts/cargo.mjs check --workspace",
     "bench:index": "node scripts/cargo.mjs run --release -p filem-core --example benchmark"
