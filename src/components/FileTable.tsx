@@ -219,9 +219,17 @@ export function FileTable({
           </div>
         );
       case "size":
-        return <div role="cell" key={key}>{formatSize(entry.size)}</div>;
+        return (
+          <div role="cell" key={key}>
+            {formatSize(entry.size)}
+          </div>
+        );
       case "mtime":
-        return <div role="cell" key={key}>{formatDate(entry.mtime)}</div>;
+        return (
+          <div role="cell" key={key}>
+            {formatDate(entry.mtime)}
+          </div>
+        );
       case "extension":
         return (
           <div role="cell" key={key}>
@@ -282,7 +290,13 @@ export function FileTable({
               <div
                 role="columnheader"
                 key={column.key}
-                className={`file-column-header ${draggedColumn === column.key ? "dragging" : ""} ${dropTarget?.key === column.key ? `drop-${dropTarget.side}` : ""}`}
+                className={[
+                  "file-column-header",
+                  draggedColumn === column.key ? "dragging" : "",
+                  dropTarget?.key === column.key
+                    ? `drop-${dropTarget.side}`
+                    : "",
+                ].filter(Boolean).join(" ")}
                 draggable
                 title="拖动列头调整顺序；按 Alt + 左右方向键移动"
                 onDragStart={(event) => onColumnDragStart(event, column.key)}
@@ -352,7 +366,9 @@ export function FileTable({
                   onPointerMove={(event) => onResizeMove(event, column.key)}
                   onPointerUp={onResizeEnd}
                   onPointerCancel={onResizeEnd}
-                  onLostPointerCapture={() => { resizing.current = null; }}
+                  onLostPointerCapture={() => {
+                    resizing.current = null;
+                  }}
                   onDragStart={(event) => {
                     event.preventDefault();
                     event.stopPropagation();
@@ -373,7 +389,11 @@ export function FileTable({
                       (event.key === "ArrowLeft" ? -1 : 1) *
                       (event.shiftKey ? 32 : 16);
                     setColumnLayout((previous) =>
-                      setFileColumnWidth(previous, column.key, currentWidth + delta),
+                      setFileColumnWidth(
+                        previous,
+                        column.key,
+                        currentWidth + delta,
+                      ),
                     );
                   }}
                 />
