@@ -2,15 +2,15 @@
 
 按用户指定的盘或文件夹聚合相同扩展名文件。索引、筛选和隐藏只改变本地视图，源文件保持原位。
 
-当前版本：**0.1.15 开发验证版**。Rust + SQLite 核心、React 界面与 Tauri 2 桌面壳已实现；Windows 实机验证仍待执行，不能视为 M0/M1 全量验收通过。
+当前版本：**0.1.16 开发验证版**。Rust + SQLite 核心、React 界面与 Tauri 2 桌面壳已实现；Windows 实机验证仍待执行，不能视为 M0/M1 全量验收通过。
 
 ## Windows 直接运行
 
-本次 **0.1.15 发布 Windows x64 安装版与便携版**。旧版本保留在历史 Releases；本次不发布 Mac 安装文件。
+本次 **0.1.16 发布 Windows x64 安装版与便携版**。旧版本保留在历史 Releases；本次不发布 Mac 安装文件。
 
-**[下载 Windows 安装包](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.15/FileM_0.1.15_x64-setup.exe)** · **[下载 Windows 便携 ZIP](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.15/FileM-0.1.15-windows-x64-portable.zip)** · [版本说明与校验值](https://github.com/LiuMaoDou/openFile/releases/tag/v0.1.15)
+**[下载 Windows 安装包](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.16/FileM_0.1.16_x64-setup.exe)** · **[下载 Windows 便携 ZIP](https://github.com/LiuMaoDou/openFile/releases/download/v0.1.16/FileM-0.1.16-windows-x64-portable.zip)** · [版本说明与校验值](https://github.com/LiuMaoDou/openFile/releases/tag/v0.1.16)
 
-Windows 11 x64 用户可运行 `FileM_0.1.15_x64-setup.exe` 安装，或完整解压 `FileM-0.1.15-windows-x64-portable.zip` 后双击 `FileM.exe`。使用者无需安装 Node.js、Rust 或 Visual Studio。便携版使用系统 WebView2；缺少时请先安装 [Microsoft WebView2 Evergreen Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)。索引仍保存在用户应用数据目录或已设置的索引位置。使用步骤和版本边界见 [Windows 使用说明](docs/Windows_使用说明.md)、[0.1.15 更新说明](docs/0.1.15_更新说明.md) 和 [0.1.14 更新说明](docs/0.1.14_更新说明.md)。分发包通过 GitHub Releases 下载，构建产物不纳入源码版本控制。Release 页面中的 Source code 是源码压缩包，不能直接双击运行；Packages 栏目不用于此应用的下载。
+Windows 11 x64 用户可运行 `FileM_0.1.16_x64-setup.exe` 安装，或完整解压 `FileM-0.1.16-windows-x64-portable.zip` 后双击 `FileM.exe`。使用者无需安装 Node.js、Rust 或 Visual Studio。便携版使用系统 WebView2；缺少时请先安装 [Microsoft WebView2 Evergreen Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)。索引仍保存在用户应用数据目录或已设置的索引位置。使用步骤和版本边界见 [Windows 使用说明](docs/Windows_使用说明.md)、[0.1.16 更新说明](docs/0.1.16_更新说明.md)、[0.1.15 更新说明](docs/0.1.15_更新说明.md) 和 [0.1.14 更新说明](docs/0.1.14_更新说明.md)。分发包通过 GitHub Releases 下载，构建产物不纳入源码版本控制。Release 页面中的 Source code 是源码压缩包，不能直接双击运行；Packages 栏目不用于此应用的下载。
 
 ## 外观主题
 
@@ -58,6 +58,7 @@ npm run windows:build -- --no-bundle -- --locked
 - 父子文件夹独立成员关系；多个文件夹引用同一路径时聚合列表只显示一条，默认显示最内层有效文件夹。
 - 扩展名归一化、类型分组、名称/路径搜索、文件夹/大小/时间筛选、排序；200 条分页与页内虚拟滚动。
 - 多选、Shift 连选、本页全选、跨页保留选择；批量隐藏、恢复与移动。
+- 文件列表的文件名、所在目录、大小、修改时间和类型列支持拖动列头调整顺序、拖动列头右侧分隔线调整宽度，设置自动保存在本机；Alt + 左右方向键可移动列，聚焦分隔线后用左右方向键可微调列宽。
 - 单文件/批量删除到系统回收站：冻结选择、原路径确认、执行前复核、逐项结果、停止后续删除、后台处理和最近 10 批操作记录；每批最多 1000 个文件。
 - 文件详情、原目录、显式文本预览（最多 64 KiB）、复制路径、系统打开、定位文件。
 - 原生文件事件监听及文件夹重新核对，手动刷新、取消；文件夹离线时保留元数据并限制内容读取。

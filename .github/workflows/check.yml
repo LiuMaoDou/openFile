@@ -17,6 +17,7 @@ jobs:
           components: rustfmt, clippy
       - run: npm ci
       - run: npm run build
+      - run: npm run test:ui
       - run: npm test
       - name: Native Windows and Everything smoke
         if: runner.os == 'Windows'
