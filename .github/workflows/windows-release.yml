@@ -1,9 +1,6 @@
 name: Publish FileM Windows
 
 on:
-  push:
-    branches: [main]
-    paths: [".github/workflows/windows-release.yml"]
   workflow_run:
     workflows: ["Check FileM"]
     branches: [main]
@@ -13,7 +10,6 @@ on:
 jobs:
   windows_release:
     if: >-
-      github.event_name == 'push' ||
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.event == 'push' &&
        github.event.workflow_run.head_branch == 'main' &&
@@ -57,6 +53,9 @@ jobs:
       - name: Check Windows frontend build
         if: steps.version.outputs.publish == 'true'
         run: npm run build
+      - name: Check Windows UI tests
+        if: steps.version.outputs.publish == 'true'
+        run: npm run test:ui
       - name: Check Windows Rust tests
         if: steps.version.outputs.publish == 'true'
         run: npm test
@@ -106,4 +105,4 @@ jobs:
             "release/FileM_${version}_x64-setup.exe",
             'release/SHA256SUMS.txt'
           )
-          gh release create "v$version" @assets --repo $env:GITHUB_REPOSITORY --target $env:RELEASE_SHA --title "FileM $version · Windows 失效文件选择修复" --notes-file 'docs/0.1.15_更新说明.md' --latest
+          gh release create "v$version" @assets --repo $env:GITHUB_REPOSITORY --target $env:RELEASE_SHA --title "FileM $version · Windows" --notes-file "docs/${version}_更新说明.md" --latest
