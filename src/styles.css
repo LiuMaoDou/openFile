@@ -529,12 +529,16 @@ main {
 }
 .file-table {
   min-width: 870px;
+  --file-column-name: minmax(180px, 1.3fr);
+  --file-column-directory: minmax(180px, 1.4fr);
+  --file-column-size: 86px;
+  --file-column-mtime: 154px;
+  --file-column-extension: 72px;
 }
 .table-grid {
   display: grid;
-  grid-template-columns:
-    32px minmax(180px, 1.3fr) minmax(180px, 1.4fr)
-    86px 154px 72px 76px;
+  grid-template-columns: var(--file-table-columns);
+
   align-items: center;
   gap: 12px;
   padding: 0 28px;
@@ -556,6 +560,64 @@ main {
   padding: 0;
   font-size: 12px;
   color: inherit;
+}
+.file-column-header {
+  position: relative;
+  min-width: 0;
+  cursor: grab;
+}
+.file-column-header:active {
+  cursor: grabbing;
+}
+.file-column-header > button {
+  max-width: calc(100% - 6px);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.file-column-header.dragging {
+  opacity: 0.45;
+}
+.file-column-header.drop-before::before,
+.file-column-header.drop-after::before {
+  content: "";
+  position: absolute;
+  top: 5px;
+  bottom: 5px;
+  width: 2px;
+  background: var(--accent);
+  pointer-events: none;
+}
+.file-column-header.drop-before::before {
+  left: -7px;
+}
+.file-column-header.drop-after::before {
+  right: -7px;
+}
+.file-column-header .column-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -11px;
+  z-index: 3;
+  width: 13px;
+  cursor: col-resize;
+  touch-action: none;
+}
+.file-column-header .column-resizer::after {
+  content: "";
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: 6px;
+  width: 2px;
+  background: var(--accent);
+  opacity: 0;
+}
+.file-column-header .column-resizer:hover::after,
+.file-column-header .column-resizer:focus-visible::after,
+.file-column-header .column-resizer:active::after {
+  opacity: 1;
 }
 .virtual-body {
   position: relative;
@@ -1263,10 +1325,11 @@ main {
   .brand {
     height: 99px;
   }
-  .table-grid {
-    grid-template-columns:
-      32px minmax(190px, 1.4fr) minmax(165px, 1.2fr)
-      85px 149px 72px 76px;
+  .file-table {
+    --file-column-name: minmax(190px, 1.4fr);
+    --file-column-directory: minmax(165px, 1.2fr);
+    --file-column-size: 85px;
+    --file-column-mtime: 149px;
   }
 }
 @media (max-width: 1190px) {
