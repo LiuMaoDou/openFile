@@ -2,17 +2,19 @@
 
 此分发目标为 Windows 11 x64（Intel / AMD 64 位）。无需安装 Node.js、Rust、Visual Studio 或运行终端命令。
 
+## 安装版
+
+运行 `FileM_0.1.17_x64-setup.exe`，按向导完成安装。安装流程会处理所需的 WebView2 运行时。
+
 ## 便携版
 
-0.1.14 本次仅提供 Windows x64 便携 ZIP。
-
-将 `FileM-0.1.14-windows-x64-portable.zip` **完整解压**，双击里面的 `FileM.exe`。不要直接在压缩包预览中启动。程序首次启动为空白文件库，点击“添加文件夹”选择自己的文件夹。
+将 `FileM-0.1.17-windows-x64-portable.zip` **完整解压**，双击里面的 `FileM.exe`。不要直接在压缩包预览中启动。程序首次启动为空白文件库，点击“添加文件夹”选择自己的文件夹。
 
 此版本使用系统的 WebView2。若电脑缺少该运行时，请先安装 [Microsoft WebView2 Evergreen Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)。免安装指不需要安装 FileM；索引和操作记录仍保存在用户应用数据目录或已设置的索引位置，不随 EXE 一起移动。
 
 ## 从旧版升级
 
-先退出旧版 FileM，再完整解压运行 0.1.14。已添加的 D 盘和其他文件夹会继续保留，并自动按正常路径显示，无需移除文件夹或清空索引。
+先退出旧版 FileM，再安装新版或完整解压运行 0.1.17 便携版。已添加的 D 盘和其他文件夹会继续保留，并自动按正常路径显示，无需移除文件夹或清空索引。
 
 索引会自动升级到版本 5 以保存目录隐藏规则；已有文件夹、文件隐藏记录和内容索引继续保留，升级后请使用 0.1.11 或更新版本。
 
@@ -38,7 +40,7 @@
 
 ## 当前版本状态
 
-这是 0.1.14 开发验证版。更新和验证结果见 GitHub Releases 的 0.1.14 版本说明；macOS 上的界面及回收测试不能替代 Windows 实机功能验收。该 Windows 包未做代码签名。
+这是 0.1.17 开发验证版。更新和验证结果见 [GitHub Releases 的 0.1.17 版本说明](https://github.com/LiuMaoDou/openFile/releases/tag/v0.1.17)；macOS 上的界面及回收测试不能替代 Windows 实机功能验收。该 Windows 包未做代码签名。
 
 首次试用请使用自己新建的测试目录，核对添加文件夹、文本预览、系统打开、批量回收和系统回收站恢复。无需关闭 Windows 安全功能；若系统或单位策略阻止未签名软件运行，应按相应策略处理。
 
