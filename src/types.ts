@@ -155,13 +155,13 @@ export interface DeletePlan {
 }
 export const DEFAULT_QUERY: Query = {
   searchMode: "name",
-  matchMode: "exact",
+  matchMode: "keywords",
   search: "",
   scopeId: "",
   extension: "",
   group: "",
   hidden: false,
-  sort: "name",
+  sort: "relevance",
   descending: false,
   offset: 0,
   limit: 200,

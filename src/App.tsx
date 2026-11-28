@@ -273,7 +273,7 @@ export default function App() {
                   maxLength={512}
                   placeholder={
                     query.matchMode === "keywords"
-                      ? "全部词都匹配，如：合同 付款"
+                      ? "空格分隔，全部匹配，如：xx yy"
                       : query.searchMode === "name"
                         ? "搜索文件名或路径"
                         : "输入内容关键词或完整短语"
