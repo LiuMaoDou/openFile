@@ -752,7 +752,8 @@ mod tests {
             .join(" ");
         assert!(e.query(&query(&many, "content")).is_err());
         assert_eq!(hits(&e, "合同 付款", "content", &scope).total, 1);
-        assert_eq!(e.query(&query("项目付款", "content")).unwrap().total, 1);
+        assert_eq!(e.query(&query("项目付款", "content")).unwrap().total, 0);
+        assert_eq!(e.query(&query("项目 付款", "content")).unwrap().total, 1);
         assert_eq!(e.query(&query("合同 不存在", "content")).unwrap().total, 0);
         assert_eq!(e.query(&query("2026 最终", "all")).unwrap().total, 1);
         assert_eq!(
@@ -795,6 +796,92 @@ mod tests {
             0
         );
         assert_eq!(e.query(&query("合同 最终版", "name")).unwrap().total, 1);
+    }
+
+    #[test]
+    fn keyword_queries_preserve_punctuation_with_and_without_word_indexes() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("files");
+        fs::create_dir(&root).unwrap();
+        for (name, text) in [
+            ("split-version.txt", "中期 1 2"),
+            ("literal-version.txt", "中期 1.2"),
+            ("literal-identifiers.txt", "中期 AB_123 api.client"),
+            (
+                "split-identifiers.txt",
+                "中期 AB separated 123 api separated client",
+            ),
+            ("missing-keyword.txt", "1.2 AB_123 api.client"),
+            ("中期.txt", "1.2"),
+            ("1.2.txt", "中期"),
+            ("中期_1.2.txt", "unrelated body"),
+        ] {
+            fs::write(root.join(name), text).unwrap();
+        }
+        let e = Engine::open(temp.path().join("db/index.sqlite")).unwrap();
+        let scope = e.add_scope(input(&root, true)).unwrap();
+        index(&e);
+        e.content_action(&scope, "pause").unwrap();
+        assert_eq!(
+            e.lock()
+                .unwrap()
+                .query_row("SELECT COUNT(*) FROM content_words", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            8
+        );
+
+        let matching_names = |search: &str, mode: &str| {
+            let mut found = e
+                .query(&Query {
+                    search: search.into(),
+                    search_mode: mode.into(),
+                    match_mode: "keywords".into(),
+                    sort: "relevance".into(),
+                    scope_id: scope.clone(),
+                    ..Default::default()
+                })
+                .unwrap()
+                .entries
+                .into_iter()
+                .map(|entry| entry.name)
+                .collect::<Vec<_>>();
+            found.sort();
+            found
+        };
+        // Existing word indexes split punctuation. Both that fast path and the
+        // literal fallback must honor each complete whitespace-delimited token.
+        for word_index_present in [true, false] {
+            if !word_index_present {
+                e.lock()
+                    .unwrap()
+                    .execute("DELETE FROM content_words", [])
+                    .unwrap();
+            }
+            for search in ["中期 1.2", " 1.2\t中期  1.2 "] {
+                assert_eq!(
+                    matching_names(search, "content"),
+                    ["literal-version.txt"],
+                    "{search:?}, word index present: {word_index_present}"
+                );
+                // Each side must satisfy all terms; splitting the terms across
+                // the filename and body does not make a combined-search hit.
+                assert_eq!(
+                    matching_names(search, "all"),
+                    ["literal-version.txt", "中期_1.2.txt"],
+                    "{search:?}, word index present: {word_index_present}"
+                );
+            }
+            for search in ["中期 AB_123", "中期 api.client", "中期 AB_123 api.client"] {
+                for mode in ["content", "all"] {
+                    assert_eq!(
+                        matching_names(search, mode),
+                        ["literal-identifiers.txt"],
+                        "{search:?}, {mode}, word index present: {word_index_present}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

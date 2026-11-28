@@ -69,6 +69,58 @@ fn suffixes_are_normalized_without_misclassifying_dotfiles() {
 }
 
 #[test]
+fn keyword_queries_keep_version_and_path_tokens_literal() {
+    let (tmp, e, root) = setup();
+    let wrong_version = "IP网络集成服务V200R008 OBP 中期审视V1.0-20240106.pptx";
+    let right_version = "IP网络集成服务V200R008 OBP 中期审视V1.2-20240106.pptx";
+    write(&root.join(wrong_version), "");
+    write(&root.join(right_version), "");
+    write(&root.join("1.2/中期路径命中.txt"), "");
+    write(&root.join("1/2/中期拆散数字.txt"), "");
+    write(&root.join("版本1.2.txt"), "");
+    write(&root.join("中期仅中文.txt"), "");
+    let other_root = tmp.path().join("other");
+    write(&other_root.join("中期外部1.2.txt"), "");
+    let scope = e.add_scope(input(&root)).unwrap();
+    let other_scope = e.add_scope(input(&other_root)).unwrap();
+    wait(&e, &scope);
+    wait(&e, &other_scope);
+
+    let matching_names = |search: &str, scope_id: &str| {
+        let mut found = names(
+            &e,
+            Query {
+                search: search.into(),
+                search_mode: "name".into(),
+                match_mode: "keywords".into(),
+                sort: "relevance".into(),
+                scope_id: scope_id.into(),
+                ..Default::default()
+            },
+        );
+        found.sort();
+        found
+    };
+    let mut expected = vec![right_version.to_string(), "中期路径命中.txt".into()];
+    expected.sort();
+    for search in [
+        "中期 1.2",
+        "1.2 中期",
+        " \t中期  \u{3000}1.2 \n",
+        "中期 1.2 1.2",
+    ] {
+        assert_eq!(matching_names(search, &scope), expected, "{search:?}");
+    }
+    assert_eq!(
+        matching_names("中期 1.2", &other_scope),
+        ["中期外部1.2.txt"]
+    );
+    expected.push("中期外部1.2.txt".into());
+    expected.sort();
+    assert_eq!(matching_names("中期 1.2", ""), expected);
+}
+
+#[test]
 fn unicode_paths_survive_queries_delete_previews_and_restart() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("中文资料 📁");

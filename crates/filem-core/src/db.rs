@@ -372,7 +372,7 @@ pub fn query(c: &Connection, q: &Query) -> Result<QueryResult> {
         search_notice: if content_search {
             Some(
                 if q.match_mode == "keywords" {
-                    "中文分词 · 全部关键词匹配；仅搜索已提取的正文"
+                    "空格分隔 · 全部关键词按原文匹配；仅搜索已提取的正文"
                 } else if q.search.chars().count() < 3 {
                     "正在搜索已索引内容 · 短词搜索可能较慢；未完成索引的文件暂不参与内容匹配"
                 } else {
